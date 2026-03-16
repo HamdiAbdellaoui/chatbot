@@ -1,0 +1,20 @@
+# List of Python dependencies for the chatbot-backend service.
+
+# --- Web Framework ---
+fastapi
+uvicorn[standard] # ASGI server for running FastAPI
+
+# --- Configuration ---
+pydantic-settings # For loading environment variables
+
+# --- Logging ---
+# (No extra packages needed for basic logging)
+
+# --- AI & RAG Pipeline (to be used later) ---
+# openai
+# llama-index
+# qdrant-client
+# sentence-transformers
+
+# --- Development Tools ---
+pyngrok

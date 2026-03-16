@@ -1,0 +1,138 @@
+# This Docker Compose file sets up the complete local development environment
+# for the AI Chatbot project. It includes Chatwoot, its dependencies (PostgreSQL, Redis),
+# and the Qdrant vector database.
+
+services:
+  # 1. PostgreSQL Database for Chatwoot
+  # Chatwoot uses a PostgreSQL database to store all its data, including
+  # conversations, contacts, agents, and settings.
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: chatbot_postgres
+    restart: unless-stopped
+    networks:
+      - chatbot-net
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # Exposing the port is optional but useful for debugging the database directly.
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DATABASE}
+      - POSTGRES_USER=${POSTGRES_USERNAME}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redis In-Memory Store for Chatwoot
+  # Redis is used by Chatwoot for caching, managing background jobs (Sidekiq),
+  # and handling real-time WebSocket connections.
+  redis:
+    image: redis:7.0-alpine
+    container_name: chatbot_redis
+    restart: unless-stopped
+    networks:
+      - chatbot-net
+    volumes:
+      - redis_data:/data
+    ports:
+      # Not strictly necessary to expose, but can be useful for debugging.
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 3. Qdrant Vector Database
+  # Qdrant will store the vector embeddings of our knowledge base documents
+  # for the RAG (Retrieval-Augmented Generation) pipeline.
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    container_name: chatbot_qdrant
+    restart: unless-stopped
+    networks:
+      - chatbot-net
+    ports:
+      - "6333:6333" # Web UI / REST API port
+      - "6334:6334" # gRPC port
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  # 4. Chatwoot Application
+  # This is the main omnichannel platform. It depends on PostgreSQL and Redis.
+  # The `depends_on` with `condition: service_healthy` ensures that Chatwoot
+  # only starts after its database and cache are ready.
+  chatwoot:
+    image: chatwoot/chatwoot:v4.1.0
+    container_name: chatbot_chatwoot
+    restart: unless-stopped
+    networks:
+      - chatbot-net
+    ports:
+      - "3000:3000" # Chatwoot Web UI
+    env_file: .env
+    command: bundle exec rails s -p 3000 -b 0.0.0.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  
+  
+  chatwoot-worker:
+    image: chatwoot/chatwoot:v4.1.0
+    container_name: chatbot_chatwoot_worker
+    restart: unless-stopped
+    networks:
+      - chatbot-net
+    env_file: .env
+    command: bundle exec sidekiq -C config/sidekiq.yml
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chatwoot:
+        condition: service_started
+
+
+  # 5. Chatbot Backend Service
+  # This is our custom FastAPI application that will handle the AI logic.
+  chatbot-backend:
+    container_name: chatbot_backend
+    restart: unless-stopped
+    build:
+      context: ../chatbot-backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    networks:
+      - chatbot-net
+    env_file:
+      - ../chatbot-backend/.env
+    volumes:
+      # Mount the source code for live reloading during development
+      - ../chatbot-backend:/app
+    depends_on:
+      - qdrant
+      - chatwoot
+
+# Define the shared network for all services to communicate
+networks:
+  chatbot-net:
+    driver: bridge
+
+# Define named volumes for persistent data storage
+# This ensures that your data is not lost when containers are recreated.
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local
