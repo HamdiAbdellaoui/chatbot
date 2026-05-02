@@ -6,7 +6,6 @@ from app.config import settings
 from app.routes.chatwoot_webhook import router as chatwoot_router
 from app.utils.logger import setup_logger
 
-
 # Setup the logger
 setup_logger()
 logger = logging.getLogger(__name__)

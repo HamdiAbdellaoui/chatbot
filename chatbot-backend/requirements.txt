@@ -4,17 +4,24 @@
 fastapi
 uvicorn[standard] # ASGI server for running FastAPI
 
+# --- HTTP Client ---
+httpx
+
 # --- Configuration ---
 pydantic-settings # For loading environment variables
 
 # --- Logging ---
 # (No extra packages needed for basic logging)
 
+# --- LLM ---
+openai
+
 # --- AI & RAG Pipeline (to be used later) ---
-# openai
 # llama-index
-# qdrant-client
 # sentence-transformers
 
 # --- Development Tools ---
 pyngrok
+
+# --- Vector DB ---
+qdrant-client
