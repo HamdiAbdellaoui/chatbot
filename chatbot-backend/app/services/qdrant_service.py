@@ -132,6 +132,57 @@ async def upsert_documents(
     logger.info("Upserted %s documents into collection=%s", len(points), collection)
 
 
+async def upsert_documents_llama_index(
+    *,
+    collection: str,
+    documents: List[Document],
+) -> None:
+    """Upsert documents using LlamaIndex for ingestion, maintaining Qdrant compat.
+    
+    This converts our generic Document into LlamaIndex Document, and uses
+    QdrantVectorStore and VectorStoreIndex to ingest them.
+    This provides compatibility with LlamaIndex's ingestion pipeline features (like routers).
+    """
+    if not documents:
+        return
+
+    from app.services.llama_index_setup import setup_llama_index
+    from llama_index.core import Document as LlamaDocument, VectorStoreIndex, StorageContext
+    from llama_index.vector_stores.qdrant import QdrantVectorStore
+    
+    # Ensure llama-index is configured
+    setup_llama_index()
+    
+    client = get_client()
+
+    vector_store = QdrantVectorStore(
+        collection_name=collection,
+        client=client
+    )
+    
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    
+    llama_docs = []
+    for doc in documents:
+        # Match our deterministic logic for Qdrant point IDs
+        point_id = _normalize_point_id(doc.id, collection=collection)
+        ldoc = LlamaDocument(
+            text=doc.text,
+            doc_id=str(point_id),
+            metadata=(doc.metadata or {}).copy()
+        )
+        llama_docs.append(ldoc)
+        
+    # We use insertion vs. fresh index creation:
+    _index = VectorStoreIndex.from_documents(
+        llama_docs,
+        storage_context=storage_context,
+        show_progress=True
+    )
+    
+    logger.info("Upserted %s documents into collection=%s using LlamaIndex", len(llama_docs), collection)
+
+
 async def search(
     *,
     collection: str,

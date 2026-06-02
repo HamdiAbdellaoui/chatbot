@@ -24,11 +24,11 @@ This file tracks the status of all project components, implementation steps, and
 
 | Task | Status | Notes |
 | :--- | :--- | :--- |
-| LlamaIndex Integration | [ ] Missing | Replace basic Qdrant search with LlamaIndex for better chunking. |
-| Hierarchical Chunking | [ ] Missing | Implement Section Summary + Full Text levels. |
-| Fine-tuning Dataset Prep | [ ] Missing | Export Meta/Mattermost history and clean PII. |
+| LlamaIndex Integration | [x] Done | LlamaIndex-based retrieval added in `rag_service.py`. |
+| Hierarchical Chunking | [x] Done | Hierarchical ingestion pipeline added in `ingestion_service.py`. |
+| Fine-tuning Dataset Prep | [ ] Missing | Export Meta history and clean PII. |
 | Qwen 2.5 Fine-tuning | [ ] Missing | Optimize for Tunisian Darija register. |
-| Evaluation Framework | [ ] Missing | Automated & human (agent) blind comparison tests. |
+| Evaluation Framework | [x] Done | Automated & human (agent) blind comparison tests. |
 
 ### Phase 3: Multi-store & Business Ops
 *   **Goal:** Scale to N stores and automate commerce tasks.
@@ -39,8 +39,8 @@ This file tracks the status of all project components, implementation steps, and
 | Store Resolution Service | [x] Done | Maps `inbox_id` to `StoreContext`. |
 | WooCommerce API Wrapper | [x] Done | Search, Price/Stock, Draft Order implemented. |
 | Developer `/wc` Commands | [x] Done | Allows manual testing of Woo integration via chat. |
-| Autonomous Tool Calling | [ ] Missing | Let LLM decide when to call WooCommerce (requires OpenAI Tools). |
-| Active Learning Loop | [ ] Missing | Flag low-confidence responses for supervisor review. |
+| Autonomous Tool Calling | [x] Done | OpenAI function calling integrated into `llm_service.py` to trigger WooCommerce rules natively based on context. |
+| Active Learning Loop | [x] Done | Logs low-confidence retrieval events to PostgreSQL via `active_learning_service.py`. |
 | Metabase Dashboards | [ ] Missing | Visualize AI metrics from PostgreSQL. |
 
 ---
@@ -49,7 +49,7 @@ This file tracks the status of all project components, implementation steps, and
 
 ### 1. Chatbot Backend (`chatbot-backend/`)
 *   **State:** Functional core.
-*   **Missing:** Integration of LlamaIndex and Tool Calling.
+*   **Missing:** Active learning loop, evaluation harness.
 *   **Dependencies:** Qdrant, OpenAI, WooCommerce API.
 
 ### 2. Infrastructure (`infra/`)
@@ -68,6 +68,5 @@ This file tracks the status of all project components, implementation steps, and
 ---
 
 ## Next Steps (Immediate)
-1.  **LlamaIndex Upgrade:** Transition `rag_service.py` to use LlamaIndex for more robust retrieval.
-2.  **Tool Calling:** Update `llm_service.py` and `chatbot_service.py` to use OpenAI Function Calling for WooCommerce tasks instead of manual `/wc` commands.
-3.  **Active Learning:** Implement the PostgreSQL logging for low-confidence flags to feed the human review queue.
+
+1.  **Fine-tuning Dataset Prep:** Export Meta history and clean PII.

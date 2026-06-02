@@ -16,6 +16,7 @@ from app.services.woocommerce_service import WooCommerceError, get_woocommerce_c
 from app.services.escalation_service import detect_escalation_request, detect_low_confidence
 from app.services.chatwoot_service import ChatwootError, escalate_conversation, get_conversation_labels
 from app.services.pii_service import detect_pii, mask_pii, select_entities_to_mask
+from app.services.active_learning_service import log_low_confidence_flag
 
 
 def _parse_wc_command(text: str) -> tuple[str, list[str]] | None:
@@ -270,12 +271,39 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
         else:
             logger.info("No context snippets retrieved")
             top_score = None
+            sources = []
+
+        # 3b. PII masking (for LLM + active learning logs). Retrieval uses raw user_message.
+        allowed_terms = _parse_allowed_terms_csv(settings.PII_ALLOWED_TERMS)
+        pii_entities = detect_pii(user_message, allowed_terms=allowed_terms)
+        pii_to_mask = select_entities_to_mask(
+            pii_entities,
+            min_confidence=settings.PII_MIN_CONFIDENCE,
+            allowed_terms=allowed_terms,
+        )
+        masked_user_message = mask_pii(
+            user_message,
+            entities=pii_entities,
+            min_confidence=settings.PII_MIN_CONFIDENCE,
+            allowed_terms=allowed_terms,
+        )
 
         # Optional: low-confidence escalation after retrieval.
         if settings.ESCALATION_ENABLED:
             lc = detect_low_confidence(top_score=top_score if isinstance(top_score, float) else None, hits_count=len(hits))
             if lc.should_escalate:
                 logger.info("Escalating due to low confidence (reason=%s)", lc.reason)
+                # Active learning: persist a flag for supervisor review.
+                await log_low_confidence_flag(
+                    store_key=store.key,
+                    inbox_id=inbox_id if isinstance(inbox_id, int) else None,
+                    conversation_id=conversation_id if isinstance(conversation_id, int) else None,
+                    reason=lc.reason,
+                    top_score=top_score if isinstance(top_score, float) else None,
+                    hits_count=len(hits),
+                    sources=sources,
+                    masked_user_message=masked_user_message,
+                )
                 _log_event(
                     "escalation_triggered",
                     conversation_id=conversation_id if isinstance(conversation_id, int) else None,
@@ -309,20 +337,6 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
 
         # 4. Generate grounded response via LLM
         logger.info("Calling LLM with retrieved context")
-        allowed_terms = _parse_allowed_terms_csv(settings.PII_ALLOWED_TERMS)
-        pii_entities = detect_pii(user_message, allowed_terms=allowed_terms)
-        pii_to_mask = select_entities_to_mask(
-            pii_entities,
-            min_confidence=settings.PII_MIN_CONFIDENCE,
-            allowed_terms=allowed_terms,
-        )
-        masked_user_message = mask_pii(
-            user_message,
-            entities=pii_entities,
-            min_confidence=settings.PII_MIN_CONFIDENCE,
-            allowed_terms=allowed_terms,
-        )
-
         if pii_entities:
             detected_types = sorted({e.type for e in pii_entities})
             confidences = [e.confidence for e in pii_entities]
@@ -351,7 +365,7 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
             ]
             logger.debug("PII spans=%s", json.dumps(spans, ensure_ascii=False, separators=(",", ":")))
 
-        response_content = await generate_grounded_reply(user_message=masked_user_message, context=context)
+        response_content = await generate_grounded_reply(user_message=masked_user_message, context=context, store_context=store)
 
         # 5. Return the generated content
         return ChatbotResult(action="reply", reply=response_content)

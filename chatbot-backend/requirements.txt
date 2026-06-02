@@ -16,9 +16,17 @@ pydantic-settings # For loading environment variables
 # --- LLM ---
 openai
 
-# --- AI & RAG Pipeline (to be used later) ---
-# llama-index
-# sentence-transformers
+# --- AI & RAG Pipeline ---
+llama-index
+llama-index-vector-stores-qdrant
+llama-index-embeddings-openai
+llama-index-embeddings-huggingface
+
+# Optional (only required when EMBEDDINGS_PROVIDER="sentence-transformers")
+sentence-transformers
+
+# --- Active Learning (PostgreSQL logging) ---
+asyncpg
 
 # --- Development Tools ---
 pyngrok

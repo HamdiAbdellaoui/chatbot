@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     APP_NAME: str = "Intelligent Omnichannel Chatbot"
     LOG_LEVEL: str = Field("INFO", env="LOG_LEVEL")
 
+    # --- Admin API ---
+    # Simple shared-secret token for protecting admin endpoints.
+    # Requests must include header: X-Admin-Token: <ADMIN_API_TOKEN>
+    ADMIN_API_TOKEN: str = Field("", env="ADMIN_API_TOKEN")
+
     # --- Chatwoot Settings ---
     # This secret is used to verify that incoming webhooks are from Chatwoot.
     # It must match the one you configure in the Chatwoot Agent Bot settings.
@@ -109,6 +114,13 @@ class Settings(BaseSettings):
     # Optional: escalate automatically when retrieval confidence is low.
     ESCALATION_LOW_CONFIDENCE_ENABLED: bool = Field(False, env="ESCALATION_LOW_CONFIDENCE_ENABLED")
     ESCALATION_MIN_TOP_SCORE: float = Field(0.15, env="ESCALATION_MIN_TOP_SCORE")
+
+    # --- Active learning loop (Phase 3) ---
+    # When enabled, the backend logs low-confidence events to PostgreSQL for supervisor review.
+    # Keep disabled by default unless you configured ACTIVE_LEARNING_DATABASE_URL.
+    ACTIVE_LEARNING_ENABLED: bool = Field(False, env="ACTIVE_LEARNING_ENABLED")
+    # Example: postgresql://user:pass@postgres:5432/chatwoot
+    ACTIVE_LEARNING_DATABASE_URL: str = Field("", env="ACTIVE_LEARNING_DATABASE_URL")
 
     # Basic retrieval tuning (no LlamaIndex yet)
     RAG_TOP_K: int = Field(4, env="RAG_TOP_K")

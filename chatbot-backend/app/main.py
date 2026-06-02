@@ -4,6 +4,7 @@ import logging
 from fastapi import FastAPI
 from app.config import settings
 from app.routes.chatwoot_webhook import router as chatwoot_router
+from app.routes.admin_active_learning import router as admin_active_learning_router
 from app.utils.logger import setup_logger
 
 # Setup the logger
@@ -19,6 +20,9 @@ app = FastAPI(
 
 # Include the webhook router
 app.include_router(chatwoot_router, prefix="/api/v1", tags=["Webhooks"])
+
+# Admin endpoints (protected by X-Admin-Token)
+app.include_router(admin_active_learning_router, prefix="/api/v1/admin", tags=["Admin"])
 
 @app.on_event("startup")
 async def startup_event():

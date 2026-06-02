@@ -18,13 +18,14 @@ An intelligent omnichannel multi-store chatbot serving Tunisian e-commerce platf
 
 ### 2.2 Privacy & PII Boundary
 *   PII (Personally Identifiable Information) MUST be masked before sending data to any external LLM API (OpenAI).
+### PII also for local model to prevent data leakedge and personnal data used for training
 *   **Workflow:** `detect_pii` -> `mask_pii` -> `LLM call`.
 *   **Exception:** RAG retrieval (Qdrant) uses the raw query for accuracy, as Qdrant is hosted locally on Proxmox.
 
 ### 2.3 WooCommerce Safety
 *   Bot-initiated write operations MUST only create **Draft Orders** with status `pending`.
 *   **Mandate:** Never allow the bot to confirm payments or delete records. All write actions require human verification in the WooCommerce CRM.
-
+# MK : human in the loop in chatwoot and not in woocommerce (prevent multi interface and user fatigue, also this is already integrated in chatwoot)
 ### 2.4 Language Mirroring
 *   The bot MUST mirror the client's language (Tunisian Darija, French, or Standard Arabic).
 *   LLM instructions (System Prompt) are the primary mechanism for this in Phase 1.
@@ -38,6 +39,7 @@ An intelligent omnichannel multi-store chatbot serving Tunisian e-commerce platf
 | `ChatbotService` | Pipeline orchestrator (`chatbot_service.py`). | Core logic implemented. |
 | `ChatwootService` | API communication with Chatwoot (messages, labels). | Functional. |
 | `PIIService` | Regex-based PII detection and masking. | Functional. |
+# mk : check if regex strip spaces and ponctuation = keeping the meaning of the message and dimiish the inference needed to process the message
 | `RAGService` | Qdrant retrieval and context formatting. | Basic (LlamaIndex pending). |
 | `WooCommerceService` | Client for WooCommerce REST API. | Functional for search/get/draft. |
 | `StoreContextService` | Config-driven store resolution (`settings.STORES_JSON`). | Robust implementation. |
