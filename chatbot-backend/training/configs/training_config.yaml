@@ -1,0 +1,27 @@
+base_model: ./models/qwen2.5-base
+train_dataset: ./datasets/train.jsonl
+validation_dataset: ./datasets/validation.jsonl
+test_dataset: ./datasets/test.jsonl
+output_dir: ./models/qwen2.5-finetuned
+max_seq_length: 2048
+learning_rate: 0.0002
+epochs: 3
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 8
+logging:
+  steps: 10
+  save_steps: 100
+  eval_steps: 100
+  report_to: tensorboard
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj

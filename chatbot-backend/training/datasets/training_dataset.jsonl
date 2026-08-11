@@ -1,0 +1,1 @@
+{"id": "conv_001", "messages": [{"role": "system", "content": "You are ROOT4PRO's customer support assistant."}, {"role": "user", "content": "Bonjour, quelle est la politique de retour ?"}, {"role": "assistant", "content": "La politique de retour est de 14 jours."}], "metadata": {"store": "root4pro", "topic": "returns", "resolution": "resolved", "language": "fr"}}

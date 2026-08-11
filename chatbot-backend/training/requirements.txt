@@ -1,0 +1,9 @@
+# Fine-tuning preparation dependencies
+pyyaml
+safetensors
+transformers
+peft
+accelerate
+# Optional for later training or dataset tooling
+# datasets
+# torch

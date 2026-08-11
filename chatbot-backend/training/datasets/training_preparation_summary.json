@@ -1,0 +1,35 @@
+{
+  "source_review_csv": "training\\datasets\\fine_tuning_review.sample.csv",
+  "source_jsonl": "training\\datasets\\training_dataset.jsonl",
+  "preparation": {
+    "review_status_counts": {
+      "approved": 1,
+      "needs_edit": 1
+    },
+    "compiled_examples": 1
+  },
+  "validation": {
+    "total_examples": 1,
+    "valid_examples": 1,
+    "invalid_examples": 0,
+    "language_distribution": {
+      "fr": 1
+    },
+    "topic_distribution": {
+      "returns": 1
+    },
+    "average_conversation_length": 3.0,
+    "issues": []
+  },
+  "split_counts": {
+    "train": 0,
+    "validation": 0,
+    "test": 1
+  },
+  "seed": 42,
+  "ratios": {
+    "train": 0.8,
+    "validation": 0.1,
+    "test": 0.1
+  }
+}

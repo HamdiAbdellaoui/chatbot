@@ -80,6 +80,84 @@ async def get_conversation(*, account_id: int, conversation_id: int) -> Dict[str
         return data if isinstance(data, dict) else {}
 
 
+async def list_conversations(
+    *,
+    account_id: int,
+    page: int = 1,
+    per_page: int = 100,
+    status: str | None = None,
+) -> list[Dict[str, Any]]:
+    """List conversations for an account using the Chatwoot API."""
+    params: Dict[str, Any] = {"page": page, "per_page": per_page}
+    if status:
+        params["status"] = status
+
+    url = f"{_base_url()}/api/v1/accounts/{account_id}/conversations"
+    async with httpx.AsyncClient(timeout=_timeout()) as client:
+        try:
+            resp = await client.get(url, headers=_headers(), params=params)
+        except httpx.RequestError as e:
+            raise ChatwootError("Failed to list conversations", details=str(e)) from e
+
+        if resp.status_code >= 400:
+            raise ChatwootError("Chatwoot list conversations failed", status_code=resp.status_code, details=resp.text[:4000])
+
+        try:
+            data = resp.json()
+        except Exception as e:
+            raise ChatwootError("Chatwoot list conversations returned non-JSON", status_code=resp.status_code, details=resp.text[:4000]) from e
+
+        if isinstance(data, dict):
+            for key in ("data", "payload", "conversations"):
+                val = data.get(key)
+                if isinstance(val, list):
+                    return [item for item in val if isinstance(item, dict)]
+            return []
+
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+
+        return []
+
+
+async def get_conversation_messages(*, account_id: int, conversation_id: int) -> list[Dict[str, Any]]:
+    """Fetch messages for a conversation.
+
+    Chatwoot installations vary in response shape, so we accept several list keys.
+    """
+    url = f"{_base_url()}/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages"
+    async with httpx.AsyncClient(timeout=_timeout()) as client:
+        try:
+            resp = await client.get(url, headers=_headers())
+        except httpx.RequestError as e:
+            raise ChatwootError("Failed to fetch conversation messages", details=str(e)) from e
+
+        if resp.status_code >= 400:
+            raise ChatwootError("Chatwoot get messages failed", status_code=resp.status_code, details=resp.text[:4000])
+
+        try:
+            data = resp.json()
+        except Exception as e:
+            raise ChatwootError("Chatwoot get messages returned non-JSON", status_code=resp.status_code, details=resp.text[:4000]) from e
+
+        if isinstance(data, dict):
+            for key in ("data", "messages", "conversation_messages", "payload"):
+                val = data.get(key)
+                if isinstance(val, list):
+                    return [item for item in val if isinstance(item, dict)]
+            nested = data.get("conversation")
+            if isinstance(nested, dict):
+                val = nested.get("messages")
+                if isinstance(val, list):
+                    return [item for item in val if isinstance(item, dict)]
+            return []
+
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+
+        return []
+
+
 def _extract_labels(conversation_payload: Dict[str, Any]) -> set[str]:
     # Chatwoot payload shape varies by endpoint/version.
     for key in ("labels", "conversation_labels"):

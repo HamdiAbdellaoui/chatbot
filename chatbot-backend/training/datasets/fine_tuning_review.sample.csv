@@ -1,0 +1,3 @@
+id,review_status,messages_json,metadata_json,notes
+conv_001,approved,"[{""role"":""system"",""content"":""You are ROOT4PRO's customer support assistant.""},{""role"":""user"",""content"":""Bonjour, quelle est la politique de retour ?""},{""role"":""assistant"",""content"":""La politique de retour est de 14 jours.""}]","{""store"":""root4pro"",""topic"":""returns"",""resolution"":""resolved"",""language"":""fr""}",
+conv_002,needs_edit,"[{""role"":""system"",""content"":""You are ROOT4PRO's customer support assistant.""},{""role"":""user"",""content"":""شنوة مدة التوصيل؟""},{""role"":""assistant"",""content"":""التوصيل سريع.""}]","{""store"":""root4pro"",""topic"":""shipping"",""resolution"":""resolved"",""language"":""darija""}",needs more detail

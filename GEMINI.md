@@ -1,6 +1,6 @@
 # GEMINI.md - Intelligent Omnichannel Chatbot
 
-This document provides architectural mandates, service maps, and development workflows for the AI Agent (Gemini CLI) working on this project.
+This document provides architectural mandates, service maps, and development workflows for the AI Agent working on this project.
 
 ## 1. Project Identity & Vision
 An intelligent omnichannel multi-store chatbot serving Tunisian e-commerce platforms. It centralizes WhatsApp, Instagram, FB Messenger, and Web chat via **Chatwoot**, uses **RAG** (Qdrant) for knowledge, and integrates with **WooCommerce** for real-time product data and draft orders.

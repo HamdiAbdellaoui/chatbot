@@ -26,7 +26,7 @@ This file tracks the status of all project components, implementation steps, and
 | :--- | :--- | :--- |
 | LlamaIndex Integration | [x] Done | LlamaIndex-based retrieval added in `rag_service.py`. |
 | Hierarchical Chunking | [x] Done | Hierarchical ingestion pipeline added in `ingestion_service.py`. |
-| Fine-tuning Dataset Prep | [ ] Missing | Export Meta history and clean PII. |
+| Fine-tuning Dataset Prep | [x] Done | Strict filter, review-first CSV with status, and compiler to training_dataset.jsonl. |
 | Qwen 2.5 Fine-tuning | [ ] Missing | Optimize for Tunisian Darija register. |
 | Evaluation Framework | [x] Done | Automated & human (agent) blind comparison tests. |
 
@@ -42,6 +42,23 @@ This file tracks the status of all project components, implementation steps, and
 | Autonomous Tool Calling | [x] Done | OpenAI function calling integrated into `llm_service.py` to trigger WooCommerce rules natively based on context. |
 | Active Learning Loop | [x] Done | Logs low-confidence retrieval events to PostgreSQL via `active_learning_service.py`. |
 | Metabase Dashboards | [ ] Missing | Visualize AI metrics from PostgreSQL. |
+
+### Phase 4: Local Qwen 2.5 Fine-tuning Preparation
+*   **Goal:** Prepare the full fine-tuning pipeline locally without starting training.
+*   **Status:** Complete.
+
+| Task | Status | Notes |
+| :--- | :--- | :--- |
+| Dataset Validation | [x] Done | JSONL validator with malformed-example detection and distribution reporting. |
+| Dataset Split | [x] Done | Reproducible 80/10/10 split into train/validation/test. |
+| Review-First Preparation | [x] Done | Review CSV compiled into `training_dataset.jsonl` before validation/split. |
+| System Prompt | [x] Done | ROOT4PRO support prompt in `training/prompts/system_prompt.txt`. |
+| LoRA / QLoRA Configs | [x] Done | Training presets in `training/configs/`. |
+| Training Config | [x] Done | YAML with base model, LR, epochs, batch size, accumulation, and logging. |
+| Inference Script | [x] Done | CPU-safe interactive CLI with optional LoRA adapter loading. |
+| Benchmark Script | [x] Done | Base vs fine-tuned comparison outputs for later review. |
+| Documentation | [x] Done | Complete usage docs in `training/README.md`. |
+| Training Execution | [ ] Missing | Deferred to the future GPU server run. |
 
 ---
 
@@ -69,4 +86,4 @@ This file tracks the status of all project components, implementation steps, and
 
 ## Next Steps (Immediate)
 
-1.  **Fine-tuning Dataset Prep:** Export Meta history and clean PII.
+1.  **GPU Handoff:** Move `training/` artifacts to the GPU server and run training later when the compute environment is ready.

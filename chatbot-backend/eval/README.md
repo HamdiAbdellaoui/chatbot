@@ -33,6 +33,21 @@ Outputs are written under `eval/runs/<run_id>/` as:
 - `predictions.csv`
 - `metrics.json`
 
+## Fine-tuning review workflow
+The fine-tuning prep flow is review-first:
+
+1. Export a review queue:
+  - `python scripts/export_finetuning_dataset.py --account-id 123`
+2. Mark rows in `chatbot-backend/artifacts/fine_tuning/fine_tuning_review.csv` with one of:
+  - `pending`
+  - `approved`
+  - `rejected`
+  - `needs_edit`
+3. Build the training set from approved rows:
+  - `python scripts/build_training_dataset.py --review-csv artifacts/fine_tuning/fine_tuning_review.csv`
+
+The compiler writes `training_dataset.jsonl` and a summary JSON. Rejected threads still stay in `fine_tuning_rejected.csv` for audit.
+
 ## Blind human review
 Create a side-by-side comparison sheet for two runs:
 

@@ -122,6 +122,28 @@ services:
       - qdrant
       - chatwoot
 
+  # 6. Metabase (Analytics)
+  # Lightweight BI for dashboarding on the shared Postgres database.
+  metabase:
+    image: metabase/metabase:v1.52.6
+    container_name: chatbot_metabase
+    restart: unless-stopped
+    networks:
+      - chatbot-net
+    ports:
+      - "3001:3000" # Metabase UI (exposed to host)
+    environment:
+      - MB_JETTY_HOST=0.0.0.0
+      - MB_DB_TYPE=postgres
+      - MB_DB_DBNAME=${POSTGRES_DATABASE}
+      - MB_DB_PORT=5432
+      - MB_DB_USER=${POSTGRES_USERNAME}
+      - MB_DB_PASS=${POSTGRES_PASSWORD}
+      - MB_DB_HOST=postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 # Define the shared network for all services to communicate
 networks:
   chatbot-net:

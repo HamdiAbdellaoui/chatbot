@@ -1,0 +1,6 @@
+model_path: ./models/qwen2.5-base
+adapter_path: ""
+system_prompt_file: ./prompts/system_prompt.txt
+max_new_tokens: 256
+temperature: 0.2
+top_p: 0.9
