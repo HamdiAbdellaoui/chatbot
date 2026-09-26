@@ -115,6 +115,14 @@ class Settings(BaseSettings):
     ESCALATION_LOW_CONFIDENCE_ENABLED: bool = Field(False, env="ESCALATION_LOW_CONFIDENCE_ENABLED")
     ESCALATION_MIN_TOP_SCORE: float = Field(0.15, env="ESCALATION_MIN_TOP_SCORE")
 
+    # --- Conversation session memory (multi-turn) ---
+    # If set, session history is stored in Redis (fast, native TTL).
+    REDIS_URL: str = Field("", env="REDIS_URL")
+    # Number of most recent turns (individual user/assistant messages) to keep per conversation.
+    SESSION_HISTORY_TURNS: int = Field(6, env="SESSION_HISTORY_TURNS")
+    # How long a conversation's history is retained without activity.
+    SESSION_TTL_SECONDS: int = Field(3600, env="SESSION_TTL_SECONDS")
+
     # --- Active learning loop (Phase 3) ---
     # When enabled, the backend logs low-confidence events to PostgreSQL for supervisor review.
     # Keep disabled by default unless you configured ACTIVE_LEARNING_DATABASE_URL.

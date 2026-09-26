@@ -157,20 +157,20 @@ _WOOCOMMERCE_TOOLS = [
     }
 ]
 
-async def generate_grounded_reply(*, user_message: str, context: str, system_prompt: Optional[str] = None, store_context: Optional[StoreContext] = None) -> str:
+async def generate_grounded_reply(*, user_message: str, context: str, system_prompt: Optional[str] = None, store_context: Optional[StoreContext] = None, history: Optional[list[dict]] = None) -> str:
     """Generate a reply grounded on retrieved context (basic RAG) and capable of calling WooCommerce tools."""
     merged_system = (system_prompt or _LANGUAGE_MIRRORING_SYSTEM_PROMPT) + "\n\n" + _RAG_GROUNDING_RULES
     augmented_user = build_rag_user_prompt(question=user_message, context=context)
-    
+
     if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY in {"your_openai_api_key", "sk-..."}:
         logger.error("OPENAI_API_KEY is not configured.")
         return "Sorry, the assistant is not configured yet. Please try again later."
-    
+
     client = _get_client()
-    messages = [
-        {"role": "system", "content": merged_system},
-        {"role": "user", "content": augmented_user},
-    ]
+    messages = [{"role": "system", "content": merged_system}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": augmented_user})
 
     wc_client = get_woocommerce_client_for_store(store_context) if store_context else None
     tools = _WOOCOMMERCE_TOOLS if wc_client else None

@@ -17,6 +17,7 @@ from app.services.escalation_service import detect_escalation_request, detect_lo
 from app.services.chatwoot_service import ChatwootError, escalate_conversation, get_conversation_labels
 from app.services.pii_service import detect_pii, mask_pii, select_entities_to_mask
 from app.services.active_learning_service import log_low_confidence_flag
+from app.services.session_service import get_history, append_turn
 
 
 def _parse_wc_command(text: str) -> tuple[str, list[str]] | None:
@@ -365,7 +366,13 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
             ]
             logger.debug("PII spans=%s", json.dumps(spans, ensure_ascii=False, separators=(",", ":")))
 
-        response_content = await generate_grounded_reply(user_message=masked_user_message, context=context, store_context=store)
+        history = await get_history(conversation_id) if isinstance(conversation_id, int) else []
+
+        response_content = await generate_grounded_reply(user_message=masked_user_message, context=context, store_context=store, history=history)
+
+        if isinstance(conversation_id, int):
+            await append_turn(conversation_id, "user", masked_user_message)
+            await append_turn(conversation_id, "assistant", response_content)
 
         # 5. Return the generated content
         return ChatbotResult(action="reply", reply=response_content)
