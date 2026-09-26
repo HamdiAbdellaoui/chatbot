@@ -20,10 +20,10 @@ openai
 llama-index
 llama-index-vector-stores-qdrant
 llama-index-embeddings-openai
-llama-index-embeddings-huggingface
 
-# Optional (only required when EMBEDDINGS_PROVIDER="sentence-transformers")
-sentence-transformers
+# Optional (only required when EMBEDDINGS_PROVIDER="sentence-transformers"):
+# llama-index-embeddings-huggingface
+# sentence-transformers
 
 # --- Active Learning (PostgreSQL logging) ---
 asyncpg

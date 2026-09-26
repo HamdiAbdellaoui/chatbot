@@ -125,7 +125,7 @@ services:
   # 6. Metabase (Analytics)
   # Lightweight BI for dashboarding on the shared Postgres database.
   metabase:
-    image: metabase/metabase:v1.52.6
+    image: metabase/metabase:latest
     container_name: chatbot_metabase
     restart: unless-stopped
     networks:
