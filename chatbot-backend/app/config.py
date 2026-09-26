@@ -2,7 +2,7 @@
 # Uses Pydantic's BaseSettings to load environment variables.
 
 from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 class Settings(BaseSettings):
     """
@@ -123,12 +123,25 @@ class Settings(BaseSettings):
     # How long a conversation's history is retained without activity.
     SESSION_TTL_SECONDS: int = Field(3600, env="SESSION_TTL_SECONDS")
 
+    # --- Shared PostgreSQL database (Phase 3) ---
+    # Used by conversation_log_service (and, via fallback, active learning) for
+    # persisting observability data. Example: postgresql://user:pass@postgres:5432/chatwoot
+    APP_DATABASE_URL: str = Field("", env="APP_DATABASE_URL")
+
     # --- Active learning loop (Phase 3) ---
     # When enabled, the backend logs low-confidence events to PostgreSQL for supervisor review.
     # Keep disabled by default unless you configured ACTIVE_LEARNING_DATABASE_URL.
     ACTIVE_LEARNING_ENABLED: bool = Field(False, env="ACTIVE_LEARNING_ENABLED")
     # Example: postgresql://user:pass@postgres:5432/chatwoot
     ACTIVE_LEARNING_DATABASE_URL: str = Field("", env="ACTIVE_LEARNING_DATABASE_URL")
+
+    @model_validator(mode="after")
+    def _fallback_app_database_url(self):
+        # Keep ACTIVE_LEARNING_DATABASE_URL for backward compatibility: if
+        # APP_DATABASE_URL is unset, reuse it so existing deployments keep working.
+        if not self.APP_DATABASE_URL and self.ACTIVE_LEARNING_DATABASE_URL:
+            self.APP_DATABASE_URL = self.ACTIVE_LEARNING_DATABASE_URL
+        return self
 
     # Basic retrieval tuning (no LlamaIndex yet)
     RAG_TOP_K: int = Field(4, env="RAG_TOP_K")

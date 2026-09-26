@@ -4,6 +4,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any, Dict, Literal
@@ -18,6 +19,7 @@ from app.services.chatwoot_service import ChatwootError, escalate_conversation, 
 from app.services.pii_service import detect_pii, mask_pii, select_entities_to_mask
 from app.services.active_learning_service import log_low_confidence_flag
 from app.services.session_service import get_history, append_turn
+from app.services.conversation_log_service import log_turn
 
 
 def _parse_wc_command(text: str) -> tuple[str, list[str]] | None:
@@ -289,6 +291,19 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
             allowed_terms=allowed_terms,
         )
 
+        # Full conversation log (masked content only). Best-effort: log_turn never raises.
+        pii_types_detected = sorted({e.type for e in pii_to_mask}) if pii_to_mask else None
+        await log_turn(
+            conversation_id=conversation_id if isinstance(conversation_id, int) else None,
+            inbox_id=inbox_id if isinstance(inbox_id, int) else None,
+            store_key=store.key,
+            direction="in",
+            content_masked=masked_user_message,
+            pii_types=pii_types_detected,
+            rag_top_score=top_score if isinstance(top_score, float) else None,
+            rag_hits_count=len(hits),
+        )
+
         # Optional: low-confidence escalation after retrieval.
         if settings.ESCALATION_ENABLED:
             lc = detect_low_confidence(top_score=top_score if isinstance(top_score, float) else None, hits_count=len(hits))
@@ -368,7 +383,23 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
 
         history = await get_history(conversation_id) if isinstance(conversation_id, int) else []
 
+        llm_started_at = time.perf_counter()
         response_content = await generate_grounded_reply(user_message=masked_user_message, context=context, store_context=store, history=history)
+        latency_ms = int((time.perf_counter() - llm_started_at) * 1000)
+
+        await log_turn(
+            conversation_id=conversation_id if isinstance(conversation_id, int) else None,
+            inbox_id=inbox_id if isinstance(inbox_id, int) else None,
+            store_key=store.key,
+            direction="out",
+            content_masked=response_content,
+            rag_top_score=top_score if isinstance(top_score, float) else None,
+            confidence_score=top_score if isinstance(top_score, float) else None,
+            escalated=False,
+            escalation_reason=None,
+            model=settings.OPENAI_MODEL,
+            latency_ms=latency_ms,
+        )
 
         if isinstance(conversation_id, int):
             await append_turn(conversation_id, "user", masked_user_message)
