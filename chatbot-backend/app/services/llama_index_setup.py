@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import List
 
 from llama_index.core import Settings as LlamaIndexSettings
+from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.embeddings.openai import OpenAIEmbedding
 
 from app.config import settings
+from app.services.embeddings_service import E5_PASSAGE_PREFIX, E5_QUERY_PREFIX, hash_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +27,37 @@ def _build_huggingface_embedding(model_name: str):
             "Install them (pip install llama-index-embeddings-huggingface sentence-transformers) "
             "or set EMBEDDINGS_PROVIDER=openai."
         ) from exc
-    return HuggingFaceEmbedding(model_name=model_name)
+
+    # e5 models expect "query: " / "passage: " prefixes (same as embeddings_service).
+    params = inspect.signature(HuggingFaceEmbedding.__init__).parameters
+    kwargs = {}
+    if "query_instruction" in params and "text_instruction" in params:
+        kwargs = {"query_instruction": E5_QUERY_PREFIX, "text_instruction": E5_PASSAGE_PREFIX}
+    else:
+        logger.warning("Installed HuggingFaceEmbedding does not support e5 instructions; prefixes not applied")
+    return HuggingFaceEmbedding(model_name=model_name, **kwargs)
+
+
+class LocalHashEmbedding(BaseEmbedding):
+    """EMBEDDINGS_PROVIDER=local: same feature-hashing vectors as embeddings_service."""
+
+    def _vector(self, text: str) -> List[float]:
+        return hash_embedding(text, int(settings.LOCAL_EMBEDDING_DIM))
+
+    def _get_query_embedding(self, query: str) -> List[float]:
+        return self._vector(query)
+
+    async def _aget_query_embedding(self, query: str) -> List[float]:
+        return self._vector(query)
+
+    def _get_text_embedding(self, text: str) -> List[float]:
+        return self._vector(text)
+
+    async def _aget_text_embedding(self, text: str) -> List[float]:
+        return self._vector(text)
+
+    def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        return [self._vector(t) for t in texts]
 
 
 def setup_llama_index() -> None:
@@ -42,20 +75,8 @@ def setup_llama_index() -> None:
             model_name = f"intfloat/{model_name}"
         LlamaIndexSettings.embed_model = _build_huggingface_embedding(model_name)
     elif provider == "local":
-        # Mock embedding for local testing setup
-        from llama_index.core.base.embeddings.base import BaseEmbedding
-        class MockEmbedding(BaseEmbedding):
-            def _get_query_embedding(self, query: str) -> List[float]:
-                return [0.0] * settings.LOCAL_EMBEDDING_DIM
-            async def _aget_query_embedding(self, query: str) -> List[float]:
-                return [0.0] * settings.LOCAL_EMBEDDING_DIM
-            def _get_text_embedding(self, text: str) -> List[float]:
-                return [0.0] * settings.LOCAL_EMBEDDING_DIM
-            async def _aget_text_embedding(self, text: str) -> List[float]:
-                return [0.0] * settings.LOCAL_EMBEDDING_DIM
-            def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
-                return [[0.0] * settings.LOCAL_EMBEDDING_DIM for _ in texts]
-        LlamaIndexSettings.embed_model = MockEmbedding()
+        # Offline embedding, identical to embeddings_service (ingestion/demo scripts).
+        LlamaIndexSettings.embed_model = LocalHashEmbedding()
     else:
         logger.warning("Unsupported EMBEDDINGS_PROVIDER: %s, defaulting to OpenAI", provider)
         LlamaIndexSettings.embed_model = OpenAIEmbedding(

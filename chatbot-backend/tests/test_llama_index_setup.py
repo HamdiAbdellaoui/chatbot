@@ -38,3 +38,53 @@ def test_sentence_transformers_without_package_gives_explicit_error(monkeypatch)
     monkeypatch.setattr(settings, "EMBEDDINGS_PROVIDER", "sentence-transformers")
     with pytest.raises(RuntimeError, match="llama-index-embeddings-huggingface"):
         llama_index_setup.setup_llama_index()
+
+
+def test_local_provider_same_vector_in_both_paths(monkeypatch):
+    import asyncio
+
+    from llama_index.core import Settings as LlamaIndexSettings
+
+    from app.services.embeddings_service import embed_query, embed_texts
+
+    monkeypatch.setattr(settings, "EMBEDDINGS_PROVIDER", "local")
+    monkeypatch.setattr(settings, "LOCAL_EMBEDDING_DIM", 64)
+    previous = LlamaIndexSettings._embed_model
+    try:
+        llama_index_setup.setup_llama_index()
+        model = LlamaIndexSettings.embed_model
+        text = "Quelle est la garantie de la perceuse ?"
+
+        service_query = asyncio.run(embed_query(text))
+        service_text = asyncio.run(embed_texts([text]))[0]
+
+        assert model.get_query_embedding(text) == service_query
+        assert model.get_text_embedding(text) == service_text
+        assert asyncio.run(model.aget_query_embedding(text)) == service_query
+        assert any(v != 0.0 for v in service_query)
+        assert len(service_query) == 64
+    finally:
+        LlamaIndexSettings._embed_model = previous
+
+
+def test_sentence_transformers_gets_e5_prefixes(monkeypatch):
+    import types
+
+    captured = {}
+
+    class FakeHF:
+        def __init__(self, model_name, query_instruction=None, text_instruction=None):
+            captured.update(model_name=model_name, query_instruction=query_instruction, text_instruction=text_instruction)
+
+    fake_module = types.ModuleType("llama_index.embeddings.huggingface")
+    fake_module.HuggingFaceEmbedding = FakeHF
+    monkeypatch.setitem(sys.modules, "llama_index.embeddings.huggingface", fake_module)
+    monkeypatch.setattr(settings, "EMBEDDING_MODEL_NAME", "multilingual-e5-large")
+
+    llama_index_setup._build_huggingface_embedding("intfloat/multilingual-e5-large")
+
+    assert captured == {
+        "model_name": "intfloat/multilingual-e5-large",
+        "query_instruction": "query: ",
+        "text_instruction": "passage: ",
+    }

@@ -52,10 +52,37 @@ def _get_sentence_transformer_model():
     return SentenceTransformer(model_name)
 
 
+E5_QUERY_PREFIX = "query: "
+E5_PASSAGE_PREFIX = "passage: "
+
+
 def _normalize_text_for_e5(text: str, *, is_query: bool) -> str:
     # E5 models expect a prefix for best performance.
-    prefix = "query: " if is_query else "passage: "
+    prefix = E5_QUERY_PREFIX if is_query else E5_PASSAGE_PREFIX
     return f"{prefix}{text.strip()}"
+
+
+def hash_embedding(text: str, dim: int) -> List[float]:
+    """Feature-hashing embedding for EMBEDDINGS_PROVIDER=local: deterministic and offline.
+
+    Not semantically strong, but good enough to test vector plumbing. Shared by
+    this service and the LlamaIndex setup so both paths produce the same vectors.
+    """
+    if dim <= 0:
+        raise ValueError("LOCAL_EMBEDDING_DIM must be > 0")
+    vec = [0.0] * dim
+    tokens = (text or "").lower().split()
+    if not tokens:
+        return vec
+    for tok in tokens:
+        h = hashlib.sha256(tok.encode("utf-8")).digest()
+        idx = int.from_bytes(h[:4], "little") % dim
+        vec[idx] += 1.0
+    # L2 normalize
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
 
 
 async def embed_texts(texts: List[str], *, is_query: bool = False) -> List[List[float]]:
@@ -63,27 +90,7 @@ async def embed_texts(texts: List[str], *, is_query: bool = False) -> List[List[
 
     if provider == "local":
         dim = int(settings.LOCAL_EMBEDDING_DIM)
-        if dim <= 0:
-            raise ValueError("LOCAL_EMBEDDING_DIM must be > 0")
-
-        def embed_one(text: str) -> List[float]:
-            # Simple feature-hashing embedding: deterministic and offline.
-            # Not semantically strong, but good enough to test vector plumbing.
-            vec = [0.0] * dim
-            tokens = (text or "").lower().split()
-            if not tokens:
-                return vec
-            for tok in tokens:
-                h = hashlib.sha256(tok.encode("utf-8")).digest()
-                idx = int.from_bytes(h[:4], "little") % dim
-                vec[idx] += 1.0
-            # L2 normalize
-            norm = math.sqrt(sum(v * v for v in vec))
-            if norm > 0:
-                vec = [v / norm for v in vec]
-            return vec
-
-        return [embed_one(t) for t in texts]
+        return [hash_embedding(t, dim) for t in texts]
 
     if provider == "openai":
         client = _get_openai_client()
