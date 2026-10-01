@@ -1,38 +1,42 @@
 # List of Python dependencies for the chatbot-backend service.
+# Main dependencies are pinned to the versions validated by the test suite.
 
 # --- Web Framework ---
-fastapi
-uvicorn[standard] # ASGI server for running FastAPI
+fastapi==0.135.2
+uvicorn[standard]==0.42.0 # ASGI server for running FastAPI
 
 # --- HTTP Client ---
-httpx
+httpx==0.28.1
 
 # --- Configuration ---
-pydantic-settings # For loading environment variables
+pydantic-settings==2.14.0 # For loading environment variables
 
 # --- Logging ---
 # (No extra packages needed for basic logging)
 
 # --- LLM ---
-openai
+openai==2.34.0
 
 # --- AI & RAG Pipeline ---
-llama-index
-llama-index-vector-stores-qdrant
-llama-index-embeddings-openai
+llama-index==0.14.21
+llama-index-core==0.14.21
+llama-index-vector-stores-qdrant==0.10.1
+llama-index-embeddings-openai==0.6.0
 
 # Optional (only required when EMBEDDINGS_PROVIDER="sentence-transformers"):
-# llama-index-embeddings-huggingface
-# sentence-transformers
+# llama-index-embeddings-huggingface==0.7.0
+# sentence-transformers==5.4.1
 
-# --- Active Learning (PostgreSQL logging) ---
-asyncpg
+# --- Active Learning / conversation logs (PostgreSQL) ---
+asyncpg==0.31.0
 
-# --- Conversation session memory (Redis) ---
-redis
+# --- Conversation session memory + webhook de-duplication (Redis) ---
+redis==8.1.0
 
 # --- Development Tools ---
-pyngrok
+pyngrok==7.5.1
 
 # --- Vector DB ---
-qdrant-client
+# Same minor version as the qdrant/qdrant image in infra/docker-compose.yml.
+# llama-index-vector-stores-qdrant 0.10.x requires qdrant-client >= 1.16.
+qdrant-client==1.17.1

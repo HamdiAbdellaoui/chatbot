@@ -22,9 +22,20 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
+# --- Unprivileged user ---
+RUN groupadd --system --gid 10001 app && \
+    useradd --system --uid 10001 --gid app --home-dir /app --no-create-home app
+
 # --- Copy Application Code ---
-# Copy the rest of the application code into the container.
-COPY ./app /app/app
+# Application, plus what the maintenance scripts (ingestion, replay, evaluation,
+# dataset export) and the MCP prototype import.
+COPY --chown=app:app ./app /app/app
+COPY --chown=app:app ./scripts /app/scripts
+COPY --chown=app:app ./eval /app/eval
+COPY --chown=app:app ./training /app/training
+COPY --chown=app:app ./mcp_server /app/mcp_server
+
+USER app
 
 # --- Expose Port ---
 # Expose the port the app will run on.
@@ -34,5 +45,5 @@ EXPOSE 8000
 # The command to run the FastAPI application using Uvicorn.
 # --host 0.0.0.0 makes the server accessible from outside the container.
 # --port 8000 matches the exposed port.
-# --reload enables auto-reloading for development, which is very convenient.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# No --reload here: development auto-reload is enabled in infra/docker-compose.yml.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

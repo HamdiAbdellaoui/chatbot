@@ -52,7 +52,9 @@ services:
   # Qdrant will store the vector embeddings of our knowledge base documents
   # for the RAG (Retrieval-Augmented Generation) pipeline.
   qdrant:
-    image: qdrant/qdrant:v1.9.2
+    # The backend uses qdrant-client 1.17.x (query_points API, server >= 1.10).
+    # Keep this image on the same minor version as qdrant-client in requirements.txt.
+    image: qdrant/qdrant:v1.17.1
     container_name: chatbot_qdrant
     restart: unless-stopped
     networks:
@@ -118,14 +120,24 @@ services:
     volumes:
       # Mount the source code for live reloading during development
       - ../chatbot-backend:/app
+    # Development: auto-reload on code changes (the image itself runs without --reload).
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
-      - qdrant
-      - chatwoot
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      chatwoot:
+        condition: service_started
 
   # 6. Metabase (Analytics)
   # Lightweight BI for dashboarding on the shared Postgres database.
   metabase:
-    image: metabase/metabase:latest
+    # Pinned (was "latest"). Metabase cannot be downgraded once its application
+    # database has been migrated, so only move this tag forward.
+    image: metabase/metabase:v0.63.19
     container_name: chatbot_metabase
     restart: unless-stopped
     networks:

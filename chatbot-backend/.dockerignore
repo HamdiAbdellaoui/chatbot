@@ -1,0 +1,7 @@
+# Keep secrets, caches and local data out of the Docker build context.
+.env
+**/__pycache__
+**/*.pyc
+.pytest_cache
+qdrant_local
+artifacts

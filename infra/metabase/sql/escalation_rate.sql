@@ -1,15 +1,16 @@
--- Escalation rate: percent of conversations labeled with the human handoff label per day
--- Adjust label join if your Chatwoot schema uses a different table for labels.
+-- Escalation rate: share of outbound bot turns flagged escalated = true, per day and store.
+-- Source: conversation_logs (written by chatbot-backend/app/services/conversation_log_service.py).
+-- Note: escalations triggered by an explicit customer request (keywords) are answered before
+-- the RAG step and are not written to conversation_logs; only low-confidence and order-request
+-- escalations are counted here.
 SELECT
-  date_trunc('day', c.created_at) AS day,
-  sum(CASE WHEN EXISTS (
-    SELECT 1 FROM conversation_labels cl WHERE cl.conversation_id = c.id AND cl.title = 'human_handoff'
-  ) THEN 1 ELSE 0 END) AS escalated_count,
-  count(*) AS total_conversations,
-  (sum(CASE WHEN EXISTS (
-    SELECT 1 FROM conversation_labels cl WHERE cl.conversation_id = c.id AND cl.title = 'human_handoff'
-  ) THEN 1 ELSE 0 END)::float / NULLIF(count(*),0)) * 100.0 AS percent_escalated
-FROM conversations c
-GROUP BY 1
-ORDER BY 1 DESC
-LIMIT 100;
+  date_trunc('day', created_at) AS day,
+  coalesce(store_key, 'unknown') AS store_key,
+  count(*) FILTER (WHERE escalated) AS escalated_turns,
+  count(*) AS outbound_turns,
+  round(100.0 * count(*) FILTER (WHERE escalated) / NULLIF(count(*), 0), 2) AS percent_escalated
+FROM conversation_logs
+WHERE direction = 'out'
+GROUP BY 1, 2
+ORDER BY 1 DESC, 2
+LIMIT 500;
