@@ -47,3 +47,31 @@ def test_detects_code_switching_as_darija():
 @pytest.mark.parametrize("text", ["", "   ", "12345", "!!!???...", "🙂🙂🙂"])
 def test_empty_or_unrecognizable_text_is_other(text):
     assert detect_language(text) == "other"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Je souhaite un devis pour Ottawa",
+        "Livraison au 3eme étage avant 9h, colis de 5kg",
+        "Une batterie 18V et un chargeur 5A",
+        "Je cherche une lampe H7 et un PS5",
+    ],
+)
+def test_french_without_false_darija_match(text):
+    assert detect_language(text) == "fr"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Nahb nechri perceuse, 9adech soumha?",
+        "Salam, 9adeh el prix?",
+        "ahla, famma livraison l Sousse?",
+        "Taw nji nchouf el magasin",
+        "chnia el garantie?",
+        "Salam, el commande ma3a livraison?",
+    ],
+)
+def test_detects_more_darija(text):
+    assert detect_language(text) == "darija"
