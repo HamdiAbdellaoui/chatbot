@@ -4,8 +4,9 @@ Design goals:
 - Optional and resilient: never raise to the caller. On any storage error,
   log and behave as if there is no history.
 - Backend selection: Redis (fast, has native TTL) if REDIS_URL is configured,
-  else PostgreSQL (asyncpg, same pattern as active_learning_service.py) if
-  ACTIVE_LEARNING_DATABASE_URL is configured, else a no-op in-memory-empty mode.
+  else PostgreSQL (shared asyncpg pool from app.db) if APP_DATABASE_URL is
+  configured (it falls back to ACTIVE_LEARNING_DATABASE_URL), else a no-op
+  in-memory-empty mode.
 - History is stored as individual turns (one role/content entry per call to
   append_turn), truncated FIFO to the last SESSION_HISTORY_TURNS entries.
 """
@@ -19,6 +20,7 @@ from functools import lru_cache
 from typing import Any, Dict, List
 
 from app.config import settings
+from app.db import get_pool
 
 logger = logging.getLogger(__name__)
 
@@ -91,36 +93,24 @@ async def _append_turn_redis(conversation_id: int, role: str, content: str) -> N
 
 # --- PostgreSQL fallback backend ---------------------------------------
 
-@lru_cache(maxsize=1)
-def _get_asyncpg():
-    try:
-        import asyncpg  # type: ignore
-    except Exception as exc:
-        raise RuntimeError("asyncpg is required for PostgreSQL-backed session history") from exc
-    return asyncpg
-
-
-_pg_pool = None
-_pg_pool_lock = asyncio.Lock()
+_pg_schema_ready = False
+_pg_schema_lock = asyncio.Lock()
 
 
 async def _get_pg_pool():
-    asyncpg = _get_asyncpg()
-    dsn = (settings.ACTIVE_LEARNING_DATABASE_URL or "").strip()
+    dsn = (settings.APP_DATABASE_URL or "").strip()
     if not dsn:
-        raise RuntimeError("ACTIVE_LEARNING_DATABASE_URL is not configured")
+        raise RuntimeError("APP_DATABASE_URL is not configured")
 
-    global _pg_pool
-    if _pg_pool is not None:
-        return _pg_pool
+    pool = await get_pool(dsn)
 
-    async with _pg_pool_lock:
-        if _pg_pool is not None:
-            return _pg_pool
-        pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=5, command_timeout=10)
-        await _init_pg_schema(pool)
-        _pg_pool = pool
-        return _pg_pool
+    global _pg_schema_ready
+    if not _pg_schema_ready:
+        async with _pg_schema_lock:
+            if not _pg_schema_ready:
+                await _init_pg_schema(pool)
+                _pg_schema_ready = True
+    return pool
 
 
 async def _init_pg_schema(pool) -> None:
@@ -204,7 +194,7 @@ def _warned_no_backend() -> Dict[str, Any]:
 def _backend_configured() -> str | None:
     if (settings.REDIS_URL or "").strip():
         return "redis"
-    if (settings.ACTIVE_LEARNING_DATABASE_URL or "").strip():
+    if (settings.APP_DATABASE_URL or "").strip():
         return "postgres"
     return None
 
@@ -219,7 +209,7 @@ async def get_history(conversation_id: int) -> List[Dict[str, str]]:
     if backend is None:
         state = _warned_no_backend()
         if not state["warned"]:
-            logger.info("No session history backend configured (REDIS_URL/ACTIVE_LEARNING_DATABASE_URL unset); running without conversation memory")
+            logger.info("No session history backend configured (REDIS_URL/APP_DATABASE_URL unset); running without conversation memory")
             state["warned"] = True
         return []
 

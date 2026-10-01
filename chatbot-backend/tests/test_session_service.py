@@ -61,6 +61,7 @@ def _use_fake_redis(monkeypatch):
     monkeypatch.setattr(session_service, "_redis_client", None)
     monkeypatch.setattr(settings, "REDIS_URL", "redis://fake:6379")
     monkeypatch.setattr(settings, "ACTIVE_LEARNING_DATABASE_URL", "")
+    monkeypatch.setattr(settings, "APP_DATABASE_URL", "")
     return fake_client
 
 
@@ -102,6 +103,7 @@ def test_history_is_truncated_to_configured_turns(monkeypatch):
 def test_no_backend_configured_returns_empty_history_without_raising(monkeypatch):
     monkeypatch.setattr(settings, "REDIS_URL", "")
     monkeypatch.setattr(settings, "ACTIVE_LEARNING_DATABASE_URL", "")
+    monkeypatch.setattr(settings, "APP_DATABASE_URL", "")
 
     async def scenario():
         await session_service.append_turn(3, "user", "hello")
@@ -110,3 +112,59 @@ def test_no_backend_configured_returns_empty_history_without_raising(monkeypatch
     history = asyncio.run(scenario())
 
     assert history == []
+
+
+class _FakeConn:
+    def __init__(self, log):
+        self.log = log
+
+    async def execute(self, sql, *args):
+        self.log.append(("execute", " ".join(sql.split())[:40], args))
+
+    async def fetch(self, sql, *args):
+        self.log.append(("fetch", " ".join(sql.split())[:40], args))
+        return [{"role": "user", "content": "bonjour"}]
+
+
+class _FakePool:
+    def __init__(self):
+        self.log: list = []
+
+    def acquire(self):
+        pool = self
+
+        class _Ctx:
+            async def __aenter__(self):
+                return _FakeConn(pool.log)
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Ctx()
+
+
+def test_postgres_fallback_uses_app_database_url_and_shared_pool(monkeypatch):
+    fake_pool = _FakePool()
+    requested_dsns: list[str] = []
+
+    async def fake_get_pool(dsn):
+        requested_dsns.append(dsn)
+        return fake_pool
+
+    monkeypatch.setattr(settings, "REDIS_URL", "")
+    monkeypatch.setattr(settings, "APP_DATABASE_URL", "postgresql://app-db.test/db")
+    monkeypatch.setattr(settings, "ACTIVE_LEARNING_DATABASE_URL", "")
+    monkeypatch.setattr(session_service, "get_pool", fake_get_pool)
+    monkeypatch.setattr(session_service, "_pg_schema_ready", False)
+
+    async def scenario():
+        await session_service.append_turn(9, "user", "bonjour")
+        return await session_service.get_history(9)
+
+    history = asyncio.run(scenario())
+
+    assert history == [{"role": "user", "content": "bonjour"}]
+    assert requested_dsns and set(requested_dsns) == {"postgresql://app-db.test/db"}
+    # Schema created once, then insert/trim/select.
+    ddl = [e for e in fake_pool.log if e[0] == "execute" and "CREATE" in e[1]]
+    assert len(ddl) == 2

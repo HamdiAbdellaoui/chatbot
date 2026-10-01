@@ -5,6 +5,7 @@ Protected by X-Admin-Token header.
 
 from __future__ import annotations
 
+import hmac
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -24,7 +25,8 @@ def _require_admin_token(x_admin_token: Optional[str]) -> None:
         raise HTTPException(status_code=503, detail="Admin endpoints are not configured")
 
     provided = (x_admin_token or "").strip()
-    if not provided or provided != expected:
+    # Constant-time comparison to avoid leaking the token through timing.
+    if not provided or not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
