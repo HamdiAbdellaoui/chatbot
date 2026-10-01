@@ -116,6 +116,14 @@ class FakeWooClient:
         self.calls.append(("get_price_and_stock", product_id))
         return dict(self.products.get(product_id) or {"id": None})
 
+    orders: dict[int, dict] = {}
+
+    async def get_order(self, *, order_id):
+        self.calls.append(("get_order", order_id))
+        if order_id not in self.orders:
+            raise RuntimeError("WooCommerce API error (404)")
+        return dict(self.orders[order_id])
+
     async def create_draft_order(self, *, line_items, customer_note=None):
         self.calls.append(("create_draft_order", list(line_items), customer_note))
         return SimpleNamespace(id=999, status="pending", total="149.000", currency="TND", payment_url=None)

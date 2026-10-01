@@ -413,6 +413,8 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
             history=history,
             language=detected_language,
             order_requests=order_requests,
+            # Raw contact values stay server-side (order status verification only).
+            verification_contacts=[e.value for e in pii_entities if e.type in ("EMAIL", "PHONE")],
         )
         latency_ms = int((time.perf_counter() - llm_started_at) * 1000)
 

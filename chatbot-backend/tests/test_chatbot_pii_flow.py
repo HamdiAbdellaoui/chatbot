@@ -27,7 +27,10 @@ def test_raw_pii_never_reaches_retrieval_or_llm(pipeline):
     assert len(pipeline.retrieve_calls) == 1
     assert len(pipeline.llm_calls) == 1
 
-    sent_outside = _all_strings(pipeline.retrieve_calls) + _all_strings(pipeline.llm_calls) + _all_strings(pipeline.grounding_calls)
+    # verification_contacts is the one server-side-only argument (order status
+    # check); test_order_status.py checks it never reaches the model.
+    llm_args = [{k: v for k, v in call.items() if k != "verification_contacts"} for call in pipeline.llm_calls]
+    sent_outside = _all_strings(pipeline.retrieve_calls) + _all_strings(llm_args) + _all_strings(pipeline.grounding_calls)
     assert EMAIL not in sent_outside
     assert "98 765 432" not in sent_outside
     assert "98765432" not in sent_outside

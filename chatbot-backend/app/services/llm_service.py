@@ -8,10 +8,12 @@ Phase 1 scope:
 
 from __future__ import annotations
 
+import hmac
 import logging
 import json
+import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from openai import AsyncOpenAI
 
@@ -221,6 +223,103 @@ _REQUEST_ORDER_TOOL = {
 }
 
 
+_ORDER_STATUS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_order_status",
+        "description": (
+            "Gets the status of an existing order. The customer must have given, in their current message, "
+            "the email or phone number used for the order; pass it exactly as it appears "
+            "(it may appear as a placeholder such as [EMAIL] or [PHONE])."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "integer", "description": "The order number."},
+                "email_or_phone": {"type": "string", "description": "Email or phone given by the customer for this order."},
+            },
+            "required": ["order_id", "email_or_phone"],
+        },
+    },
+}
+
+_PII_PLACEHOLDER_RE = re.compile(r"\[(?:EMAIL|PHONE|NAME|ADDRESS)\]")
+
+_ORDER_STATUS_UNVERIFIED = json.dumps({
+    "result": "unable_to_verify",
+    "message": "Unable to verify this order with the information provided. Ask the customer to check the order number and the email or phone used for the order.",
+})
+
+
+def _normalize_email(value: str) -> str | None:
+    v = (value or "").strip().lower()
+    return v if "@" in v else None
+
+
+def _normalize_phone(value: str) -> str | None:
+    digits = re.sub(r"\D", "", value or "")
+    if digits.startswith("00"):
+        digits = digits[2:]
+    # Compare national numbers: Tunisian numbers have 8 digits after the 216 prefix.
+    if len(digits) < 8:
+        return None
+    return digits[-8:]
+
+
+def _contact_matches_billing(candidates: Sequence[str], billing: Dict[str, Any]) -> bool:
+    billing_email = _normalize_email(str(billing.get("email") or ""))
+    billing_phone = _normalize_phone(str(billing.get("phone") or ""))
+    for candidate in candidates:
+        email = _normalize_email(candidate)
+        if email and billing_email and hmac.compare_digest(email, billing_email):
+            return True
+        phone = _normalize_phone(candidate) if not email else None
+        if phone and billing_phone and hmac.compare_digest(phone, billing_phone):
+            return True
+    return False
+
+
+async def _get_order_status(
+    args: Dict[str, Any],
+    *,
+    wc_client: Any,
+    verification_contacts: Optional[Sequence[str]],
+) -> str:
+    order_id = _as_positive_int(args.get("order_id"))
+    if order_id is None:
+        return _ORDER_STATUS_UNVERIFIED
+
+    # Raw contact values detected server-side in the current message (never
+    # shown to the model), plus the model's argument when it is not a placeholder.
+    candidates = [c for c in (verification_contacts or []) if isinstance(c, str) and c.strip()]
+    from_model = args.get("email_or_phone")
+    if isinstance(from_model, str) and from_model.strip() and not _PII_PLACEHOLDER_RE.search(from_model):
+        candidates.append(from_model)
+    if not candidates:
+        logger.info("Order status lookup without contact information; not verified")
+        return _ORDER_STATUS_UNVERIFIED
+
+    try:
+        order = await wc_client.get_order(order_id=order_id)
+    except Exception as e:
+        # Same neutral answer for "not found" and errors: no order-id enumeration.
+        logger.info("Order status lookup failed (%s); not verified", type(e).__name__)
+        return _ORDER_STATUS_UNVERIFIED
+
+    billing = order.get("billing") if isinstance(order.get("billing"), dict) else {}
+    if not order or not _contact_matches_billing(candidates, billing):
+        logger.info("Order status lookup: contact does not match; not verified")
+        return _ORDER_STATUS_UNVERIFIED
+
+    logger.info("Order status lookup: verified")
+    return json.dumps({
+        "status": order.get("status"),
+        "date_created": order.get("date_created"),
+        "total": order.get("total"),
+        "currency": order.get("currency"),
+    })
+
+
 def _order_mode() -> str:
     mode = (settings.WOOCOMMERCE_ORDER_MODE or "").strip().lower()
     return "direct" if mode == "direct" else "handoff"
@@ -228,7 +327,7 @@ def _order_mode() -> str:
 
 def get_woocommerce_tools() -> list[dict]:
     order_tool = _CREATE_DRAFT_ORDER_TOOL if _order_mode() == "direct" else _REQUEST_ORDER_TOOL
-    return [*_SEARCH_AND_PRICE_TOOLS, order_tool]
+    return [*_SEARCH_AND_PRICE_TOOLS, order_tool, _ORDER_STATUS_TOOL]
 
 
 @dataclass(frozen=True)
@@ -258,6 +357,7 @@ async def execute_tool_call(
     *,
     wc_client: Any,
     order_requests: Optional[List[OrderRequest]] = None,
+    verification_contacts: Optional[Sequence[str]] = None,
 ) -> str:
     """Execute one tool requested by the model and return its JSON/text result.
 
@@ -267,6 +367,9 @@ async def execute_tool_call(
         return "(Error: WooCommerce client is not available for this store)"
 
     try:
+        if function_name == "get_order_status":
+            return await _get_order_status(args, wc_client=wc_client, verification_contacts=verification_contacts)
+
         if function_name == "search_products":
             res = await wc_client.search_products(query=args.get("query", ""))
             return json.dumps([{"id": p.id, "name": p.name, "price": p.price, "stock_status": p.stock_status} for p in res])
@@ -332,12 +435,16 @@ def _assistant_tool_call_message(message: Any) -> Dict[str, Any]:
     }
 
 
-async def generate_grounded_reply(*, user_message: str, context: str, system_prompt: Optional[str] = None, store_context: Optional[StoreContext] = None, history: Optional[list[dict]] = None, language: Optional[str] = None, order_requests: Optional[List[OrderRequest]] = None) -> str:
+async def generate_grounded_reply(*, user_message: str, context: str, system_prompt: Optional[str] = None, store_context: Optional[StoreContext] = None, history: Optional[list[dict]] = None, language: Optional[str] = None, order_requests: Optional[List[OrderRequest]] = None, verification_contacts: Optional[Sequence[str]] = None) -> str:
     """Generate a reply grounded on retrieved context (basic RAG) and capable of calling WooCommerce tools.
 
     In WOOCOMMERCE_ORDER_MODE=handoff, every validated `request_order` call is
     appended to `order_requests` (when provided) so the caller can hand the
     conversation over to a human.
+
+    `verification_contacts` are raw emails/phones detected in the current
+    customer message. They are only used server-side by `get_order_status`
+    and are never sent to the model.
     """
     merged_system = (system_prompt or _resolve_system_prompt(language)) + "\n\n" + _RAG_GROUNDING_RULES
     augmented_user = build_rag_user_prompt(question=user_message, context=context)
@@ -392,7 +499,11 @@ async def generate_grounded_reply(*, user_message: str, context: str, system_pro
                     args = {}
 
                 tool_result = await execute_tool_call(
-                    function_name, args, wc_client=wc_client, order_requests=order_requests
+                    function_name,
+                    args,
+                    wc_client=wc_client,
+                    order_requests=order_requests,
+                    verification_contacts=verification_contacts,
                 )
 
                 # Append tool response

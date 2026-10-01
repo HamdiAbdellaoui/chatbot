@@ -136,6 +136,11 @@ class WooCommerceClient:
             "stock_quantity": p.get("stock_quantity"),
         }
 
+    async def get_order(self, *, order_id: int) -> Dict[str, Any]:
+        """Full order payload. Contains customer PII: never pass it to the LLM as-is."""
+        data = await self._request("GET", f"/orders/{order_id}")
+        return data if isinstance(data, dict) else {}
+
     async def create_draft_order(
         self,
         *,
