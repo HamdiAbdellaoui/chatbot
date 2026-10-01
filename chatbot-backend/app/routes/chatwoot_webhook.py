@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Request
 from app.config import settings
 from app.services.chatbot_service import process_chatwoot_message
 from app.services.chatwoot_service import ChatwootError, send_message
+from app.services.dedup_service import is_duplicate_message
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -218,6 +219,11 @@ async def handle_chatwoot_webhook(request: Request):
 
     account_id = event.get("account_id")
     conversation_id = event.get("conversation_id")
+
+    # Idempotence: Chatwoot retries/replays must not produce a second reply.
+    if await is_duplicate_message(event.get("message_id")):
+        logger.info("Duplicate webhook ignored (message_id=%s)", event.get("message_id"))
+        return {"status": "duplicate", "message_id": event.get("message_id")}
 
     # Generate next action (reply vs no_reply) from the chatbot pipeline.
     result = await process_chatwoot_message(payload, account_id=account_id if isinstance(account_id, int) else None)

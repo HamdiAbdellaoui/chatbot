@@ -59,6 +59,11 @@ async def _get_redis_client():
         return _redis_client
 
 
+async def get_redis_client():
+    """Shared Redis client (REDIS_URL). Raises if Redis is not configured/installed."""
+    return await _get_redis_client()
+
+
 async def _get_history_redis(conversation_id: int) -> List[Dict[str, str]]:
     client = await _get_redis_client()
     raw_entries = await client.lrange(_history_key(conversation_id), 0, -1)

@@ -9,6 +9,15 @@ from app.config import settings
 from app.services import chatbot_service
 
 
+@pytest.fixture(autouse=True)
+def _reset_webhook_dedup():
+    from app.services import dedup_service
+
+    dedup_service.clear_memory_cache()
+    yield
+    dedup_service.clear_memory_cache()
+
+
 class PipelineRecorder:
     def __init__(self):
         self.retrieve_calls: list[dict] = []
