@@ -2,20 +2,19 @@
 
 Goals:
 - Correctly receive message events from Chatwoot
-- Validate webhook authenticity (HMAC)
+- Authenticate webhooks (URL token for Chatwoot v4.1.0, HMAC signature for >= v4.13)
 - Extract message content, conversation_id, inbox_id
 - Send a reply back to Chatwoot
 """
 
-import base64
-import binascii
 import hashlib
 import hmac
 import json
 import logging
+import time
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from app.config import settings
 from app.services.chatbot_service import process_chatwoot_message
@@ -25,64 +24,82 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _normalize_signature_header(value: str) -> str:
-    # Chatwoot header values may include whitespace or quotes.
-    return value.strip().strip('"').strip("'")
+_UNAUTHORIZED = HTTPException(status_code=401, detail="Unauthorized")
 
 
-def _signature_to_bytes(signature_header: str) -> Optional[bytes]:
-    """Parse signature header into raw bytes.
+def compute_chatwoot_signature(secret: str, timestamp: str, raw_body: bytes) -> str:
+    """Chatwoot >= v4.13 signature: "sha256=" + hex(HMAC-SHA256(secret, "{timestamp}." + body))."""
+    digest = hmac.new(secret.encode("utf-8"), f"{timestamp}.".encode("utf-8") + raw_body, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
 
-Supports the common encodings used by webhook systems:
-- hex string (64 chars for sha256)
-- base64 string
-"""
-    sig = _normalize_signature_header(signature_header)
 
-    # Some systems prefix values (e.g. "sha256=..."). Be tolerant.
-    if sig.lower().startswith("sha256="):
-        sig = sig.split("=", 1)[1].strip()
+def _verify_token(provided: Optional[str]) -> None:
+    expected = settings.CHATWOOT_WEBHOOK_TOKEN or ""
+    if not expected:
+        # Fail closed: an empty token must never authenticate anything.
+        logger.error("CHATWOOT_WEBHOOK_TOKEN is empty while CHATWOOT_WEBHOOK_AUTH_MODE=token; rejecting webhook.")
+        raise _UNAUTHORIZED
+    if not provided:
+        logger.warning("Webhook rejected: missing token.")
+        raise _UNAUTHORIZED
+    if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+        logger.warning("Webhook rejected: invalid token.")
+        raise _UNAUTHORIZED
 
-    # Try hex first
+
+def _verify_signature(raw_body: bytes, signature: Optional[str], timestamp: Optional[str]) -> None:
+    secret = settings.CHATWOOT_WEBHOOK_SECRET or ""
+    if not secret:
+        logger.error("CHATWOOT_WEBHOOK_SECRET is empty while CHATWOOT_WEBHOOK_AUTH_MODE=signature; rejecting webhook.")
+        raise _UNAUTHORIZED
+    if not signature or not timestamp:
+        logger.warning("Webhook rejected: missing X-Chatwoot-Signature or X-Chatwoot-Timestamp header.")
+        raise _UNAUTHORIZED
+
+    timestamp = timestamp.strip()
     try:
-        if len(sig) == 64:
-            return binascii.unhexlify(sig)
-    except (binascii.Error, ValueError):
-        pass
+        ts = int(timestamp)
+    except ValueError:
+        logger.warning("Webhook rejected: malformed X-Chatwoot-Timestamp.")
+        raise _UNAUTHORIZED
+    skew = abs(int(time.time()) - ts)
+    if skew > max(0, int(settings.CHATWOOT_WEBHOOK_MAX_SKEW_S)):
+        logger.warning("Webhook rejected: timestamp outside allowed window (skew_s=%s).", skew)
+        raise _UNAUTHORIZED
 
-    # Try base64
-    try:
-        return base64.b64decode(sig, validate=True)
-    except (binascii.Error, ValueError):
-        return None
+    expected = compute_chatwoot_signature(secret, timestamp, raw_body)
+    if not hmac.compare_digest(signature.strip().encode("utf-8"), expected.encode("utf-8")):
+        logger.warning("Webhook rejected: invalid signature.")
+        raise _UNAUTHORIZED
 
 
-def verify_signature(raw_body: bytes, signature_header: Optional[str]) -> None:
-    """Verify Chatwoot webhook signature.
+def authenticate_webhook(request: Request, raw_body: bytes) -> None:
+    """Authenticate an incoming Chatwoot webhook according to CHATWOOT_WEBHOOK_AUTH_MODE.
 
-We compute HMAC-SHA256 over the *raw request body* using the shared secret.
-"""
-    if not settings.CHATWOOT_VALIDATE_WEBHOOK_SIGNATURE:
-        logger.warning("Webhook signature validation is DISABLED (CHATWOOT_VALIDATE_WEBHOOK_SIGNATURE=false).")
+    Raises HTTPException(401) on failure. Never logs the token or the signature.
+    """
+    mode, deprecated = settings.webhook_auth_mode()
+    configured = (settings.CHATWOOT_WEBHOOK_AUTH_MODE or "").strip().lower()
+    if configured and configured != mode:
+        logger.error("Unknown CHATWOOT_WEBHOOK_AUTH_MODE=%r; falling back to 'token'.", configured)
+
+    if mode == "none":
+        if deprecated:
+            logger.warning(
+                "CHATWOOT_VALIDATE_WEBHOOK_SIGNATURE is deprecated; use CHATWOOT_WEBHOOK_AUTH_MODE=none instead."
+            )
+        logger.warning("Webhook authentication is DISABLED (CHATWOOT_WEBHOOK_AUTH_MODE=none). Development only.")
         return
 
-    if not signature_header:
-        logger.warning("Missing X-Chatwoot-Hmac-SHA256 header.")
-        raise HTTPException(status_code=401, detail="HMAC signature missing.")
+    if mode == "signature":
+        _verify_signature(
+            raw_body,
+            request.headers.get("X-Chatwoot-Signature"),
+            request.headers.get("X-Chatwoot-Timestamp"),
+        )
+        return
 
-    provided = _signature_to_bytes(signature_header)
-    if provided is None:
-        logger.warning("Unparseable webhook signature header value.")
-        raise HTTPException(status_code=401, detail="Invalid HMAC signature.")
-
-    secret = settings.CHATWOOT_WEBHOOK_SECRET.encode("utf-8")
-    expected = hmac.new(secret, raw_body, hashlib.sha256).digest()
-
-    if not hmac.compare_digest(expected, provided):
-        logger.error("Invalid webhook HMAC signature.")
-        raise HTTPException(status_code=401, detail="Invalid HMAC signature.")
-
-    logger.debug("Webhook HMAC signature verified successfully.")
+    _verify_token(request.query_params.get("token"))
 
 
 def _extract_message_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -165,8 +182,7 @@ async def handle_chatwoot_webhook(request: Request):
     It verifies the request signature and processes message-related events.
     """
     raw_body = await request.body()
-    signature = request.headers.get("X-Chatwoot-Hmac-SHA256")
-    verify_signature(raw_body, signature)
+    authenticate_webhook(request, raw_body)
 
     try:
         payload: Dict[str, Any] = json.loads(raw_body.decode("utf-8"))

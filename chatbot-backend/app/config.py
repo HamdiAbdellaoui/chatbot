@@ -18,13 +18,28 @@ class Settings(BaseSettings):
     ADMIN_API_TOKEN: str = Field("", env="ADMIN_API_TOKEN")
 
     # --- Chatwoot Settings ---
-    # This secret is used to verify that incoming webhooks are from Chatwoot.
-    # It must match the one you configure in the Chatwoot Agent Bot settings.
-    CHATWOOT_WEBHOOK_SECRET: str = Field("your_chatwoot_webhook_secret", env="CHATWOOT_WEBHOOK_SECRET")
+    # How incoming Agent Bot webhooks are authenticated:
+    # - "token" (default): shared secret passed in the Agent Bot URL as
+    #   ?token=<CHATWOOT_WEBHOOK_TOKEN>. Works with Chatwoot v4.1.0, which does
+    #   not sign Agent Bot webhooks.
+    # - "signature": X-Chatwoot-Signature / X-Chatwoot-Timestamp headers
+    #   (Chatwoot >= v4.13), verified with CHATWOOT_WEBHOOK_SECRET.
+    # - "none": no check at all (development only; warns on every request).
+    # Left empty, the mode is resolved by webhook_auth_mode() below.
+    CHATWOOT_WEBHOOK_AUTH_MODE: str = Field("", env="CHATWOOT_WEBHOOK_AUTH_MODE")
 
-    # Whether to enforce Chatwoot webhook signature validation.
-    # Keep this enabled in production.
-    CHATWOOT_VALIDATE_WEBHOOK_SIGNATURE: bool = Field(True, env="CHATWOOT_VALIDATE_WEBHOOK_SIGNATURE")
+    # Shared secret for the "token" mode. Empty = every webhook is rejected.
+    CHATWOOT_WEBHOOK_TOKEN: str = Field("", env="CHATWOOT_WEBHOOK_TOKEN")
+
+    # HMAC secret for the "signature" mode (the Agent Bot secret shown by Chatwoot >= v4.13).
+    CHATWOOT_WEBHOOK_SECRET: str = Field("", env="CHATWOOT_WEBHOOK_SECRET")
+
+    # "signature" mode: maximum accepted gap between X-Chatwoot-Timestamp and now.
+    CHATWOOT_WEBHOOK_MAX_SKEW_S: int = Field(300, env="CHATWOOT_WEBHOOK_MAX_SKEW_S")
+
+    # Deprecated: replaced by CHATWOOT_WEBHOOK_AUTH_MODE. Only an explicit
+    # "false" is still honoured (mapped to mode "none") when the new mode is unset.
+    CHATWOOT_VALIDATE_WEBHOOK_SIGNATURE: bool | None = Field(None, env="CHATWOOT_VALIDATE_WEBHOOK_SIGNATURE")
 
     # Chatwoot API settings (used to send bot replies back to Chatwoot).
     # In Docker Compose, Chatwoot is typically reachable at http://chatwoot:3000
@@ -35,7 +50,7 @@ class Settings(BaseSettings):
     # Network timeout for Chatwoot API calls (messages, labels, assignments, etc.)
     CHATWOOT_REQUEST_TIMEOUT_S: float = Field(6.0, env="CHATWOOT_REQUEST_TIMEOUT_S")
 
-    @field_validator("CHATWOOT_ACCOUNT_ID", mode="before")
+    @field_validator("CHATWOOT_ACCOUNT_ID", "CHATWOOT_VALIDATE_WEBHOOK_SIGNATURE", mode="before")
     @classmethod
     def _empty_str_to_none(cls, v):
         if v == "":
@@ -194,6 +209,18 @@ class Settings(BaseSettings):
     # --- Application Settings ---
     ENVIRONMENT: str = "development" # "development" or "production"
     APP_PORT: int = 8000
+
+    def webhook_auth_mode(self) -> tuple[str, bool]:
+        """Return (effective webhook auth mode, used_deprecated_flag).
+
+        Unknown values fall back to "token" (fail closed).
+        """
+        mode = (self.CHATWOOT_WEBHOOK_AUTH_MODE or "").strip().lower()
+        if mode:
+            return (mode if mode in {"token", "signature", "none"} else "token"), False
+        if self.CHATWOOT_VALIDATE_WEBHOOK_SIGNATURE is False:
+            return "none", True
+        return "token", False
 
     class Config:
         # This tells Pydantic to look for a .env file in the project root.
