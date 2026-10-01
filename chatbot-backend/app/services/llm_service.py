@@ -316,6 +316,22 @@ async def execute_tool_call(
         return f"Failed to execute {function_name}: {e}"
 
 
+def _assistant_tool_call_message(message: Any) -> Dict[str, Any]:
+    """Serialize the assistant's tool-call turn so it can be sent back in `messages`."""
+    return {
+        "role": "assistant",
+        "content": message.content,
+        "tool_calls": [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+            }
+            for tc in message.tool_calls
+        ],
+    }
+
+
 async def generate_grounded_reply(*, user_message: str, context: str, system_prompt: Optional[str] = None, store_context: Optional[StoreContext] = None, history: Optional[list[dict]] = None, language: Optional[str] = None, order_requests: Optional[List[OrderRequest]] = None) -> str:
     """Generate a reply grounded on retrieved context (basic RAG) and capable of calling WooCommerce tools.
 
@@ -339,22 +355,32 @@ async def generate_grounded_reply(*, user_message: str, context: str, system_pro
     wc_client = get_woocommerce_client_for_store(store_context) if store_context else None
     tools = get_woocommerce_tools() if wc_client else None
 
-    try:
+    max_rounds = max(1, int(settings.LLM_MAX_TOOL_ROUNDS))
 
+    async def complete(*, with_tools: bool):
+        kwargs: Dict[str, Any] = {}
+        if with_tools and tools:
+            kwargs["tools"] = tools
         response = await client.chat.completions.create(
             model=settings.OPENAI_MODEL,
             messages=messages,
             max_tokens=settings.OPENAI_MAX_TOKENS,
             temperature=0.2,
             timeout=settings.OPENAI_REQUEST_TIMEOUT_S,
-            tools=tools,
+            **kwargs,
         )
+        return response.choices[0].message
 
-        response_message = response.choices[0].message
+    try:
+        # Up to max_rounds model turns with tools exposed; stop as soon as the
+        # model answers without requesting a tool.
+        for _ in range(max_rounds):
+            response_message = await complete(with_tools=True)
+            if not response_message.tool_calls:
+                return (response_message.content or "").strip()
 
-        if response_message.tool_calls:
             # We append the assistant's request to call a tool
-            messages.append(response_message)
+            messages.append(_assistant_tool_call_message(response_message))
 
             for tool_call in response_message.tool_calls:
                 function_name = tool_call.function.name
@@ -376,18 +402,11 @@ async def generate_grounded_reply(*, user_message: str, context: str, system_pro
                     "name": function_name,
                     "content": tool_result,
                 })
-            
-            # Send second request with tool results
-            second_response = await client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
-                messages=messages,
-                max_tokens=settings.OPENAI_MAX_TOKENS,
-                temperature=0.2,
-                timeout=settings.OPENAI_REQUEST_TIMEOUT_S,
-            )
-            return (second_response.choices[0].message.content or "").strip()
-        else:
-            return (response_message.content or "").strip()
+
+        # Tool budget exhausted: one last turn without tools forces a text answer.
+        logger.info("LLM tool rounds exhausted (max=%s); requesting final answer without tools", max_rounds)
+        final_message = await complete(with_tools=False)
+        return (final_message.content or "").strip()
 
     except Exception:
         logger.exception("OpenAI grounded request failed")

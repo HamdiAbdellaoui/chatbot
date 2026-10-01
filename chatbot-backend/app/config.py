@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = Field("gpt-4o", env="OPENAI_MODEL")
     OPENAI_REQUEST_TIMEOUT_S: float = Field(20.0, env="OPENAI_REQUEST_TIMEOUT_S")
     OPENAI_MAX_TOKENS: int = Field(400, env="OPENAI_MAX_TOKENS")
+    # Maximum model turns with WooCommerce tools exposed per reply (tool-calling loop).
+    LLM_MAX_TOOL_ROUNDS: int = Field(3, env="LLM_MAX_TOOL_ROUNDS")
 
     # --- PII masking (LLM privacy) ---
     # If enabled, logs only span metadata (type/start/end/confidence) at DEBUG level.
