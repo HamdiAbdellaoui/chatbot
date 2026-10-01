@@ -7,16 +7,30 @@ from typing import List
 
 from llama_index.core import Settings as LlamaIndexSettings
 from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+
+def _build_huggingface_embedding(model_name: str):
+    # Optional dependency: only needed for EMBEDDINGS_PROVIDER=sentence-transformers.
+    try:
+        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+    except ImportError as exc:
+        raise RuntimeError(
+            "EMBEDDINGS_PROVIDER=sentence-transformers requires the optional packages "
+            "'llama-index-embeddings-huggingface' and 'sentence-transformers'. "
+            "Install them (pip install llama-index-embeddings-huggingface sentence-transformers) "
+            "or set EMBEDDINGS_PROVIDER=openai."
+        ) from exc
+    return HuggingFaceEmbedding(model_name=model_name)
+
+
 def setup_llama_index() -> None:
     """Configures LlamaIndex embeddings provider based on settings."""
     provider = (settings.EMBEDDINGS_PROVIDER or "openai").strip().lower()
-    
+
     if provider == "openai":
         LlamaIndexSettings.embed_model = OpenAIEmbedding(
             model=settings.OPENAI_EMBEDDING_MODEL,
@@ -26,7 +40,7 @@ def setup_llama_index() -> None:
         model_name = settings.EMBEDDING_MODEL_NAME
         if "/" not in model_name:
             model_name = f"intfloat/{model_name}"
-        LlamaIndexSettings.embed_model = HuggingFaceEmbedding(model_name=model_name)
+        LlamaIndexSettings.embed_model = _build_huggingface_embedding(model_name)
     elif provider == "local":
         # Mock embedding for local testing setup
         from llama_index.core.base.embeddings.base import BaseEmbedding
