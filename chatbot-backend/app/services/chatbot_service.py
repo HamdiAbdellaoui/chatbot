@@ -264,31 +264,9 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
             finally:
                 await client.aclose()
 
-        # 3. Retrieve context from Qdrant (basic RAG)
-        collection = store.qdrant_collection
-        top_k = settings.RAG_TOP_K
-        logger.info(
-            "Resolved store=%s (inbox_id=%s inbox_name=%s) -> collection=%s",
-            store.key,
-            inbox_id,
-            inbox_name,
-            collection,
-        )
-        logger.info("Retrieving context from Qdrant collection=%s top_k=%s", collection, top_k)
-        context, hits = await retrieve_context(query=user_message, collection=collection, limit=top_k)
-        if hits:
-            top_score = hits[0].get("score")
-            sources = []
-            for h in hits[: min(len(hits), 3)]:
-                payload = h.get("payload") or {}
-                sources.append(payload.get("source") or payload.get("doc_id") or payload.get("title") or "unknown")
-            logger.info("Retrieved %s context snippets (top_score=%s sources=%s)", len(hits), top_score, sources)
-        else:
-            logger.info("No context snippets retrieved")
-            top_score = None
-            sources = []
-
-        # 3b. PII masking (for LLM + active learning logs). Retrieval uses raw user_message.
+        # 3. PII masking. Must happen before anything leaves the backend: the
+        # retrieval query is embedded by an external provider (OpenAI), and the
+        # LLM, history and logs also only ever see masked text.
         allowed_terms = _parse_allowed_terms_csv(settings.PII_ALLOWED_TERMS)
         pii_entities = detect_pii(user_message, allowed_terms=allowed_terms)
         pii_to_mask = select_entities_to_mask(
@@ -302,6 +280,30 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
             min_confidence=settings.PII_MIN_CONFIDENCE,
             allowed_terms=allowed_terms,
         )
+
+        # 3b. Retrieve context from Qdrant (basic RAG) using the masked text only.
+        collection = store.qdrant_collection
+        top_k = settings.RAG_TOP_K
+        logger.info(
+            "Resolved store=%s (inbox_id=%s inbox_name=%s) -> collection=%s",
+            store.key,
+            inbox_id,
+            inbox_name,
+            collection,
+        )
+        logger.info("Retrieving context from Qdrant collection=%s top_k=%s", collection, top_k)
+        context, hits = await retrieve_context(query=masked_user_message, collection=collection, limit=top_k)
+        if hits:
+            top_score = hits[0].get("score")
+            sources = []
+            for h in hits[: min(len(hits), 3)]:
+                payload = h.get("payload") or {}
+                sources.append(payload.get("source") or payload.get("doc_id") or payload.get("title") or "unknown")
+            logger.info("Retrieved %s context snippets (top_score=%s sources=%s)", len(hits), top_score, sources)
+        else:
+            logger.info("No context snippets retrieved")
+            top_score = None
+            sources = []
 
         # Full conversation log (masked content only). Best-effort: log_turn never raises.
         pii_types_detected = sorted({e.type for e in pii_to_mask}) if pii_to_mask else None
@@ -331,7 +333,7 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
 
         if pii_to_mask:
             masked_types = sorted({e.type for e in pii_to_mask})
-            logger.info("Applied PII masking before LLM (types=%s count=%s)", masked_types, len(pii_to_mask))
+            logger.info("Applied PII masking before retrieval/LLM (types=%s count=%s)", masked_types, len(pii_to_mask))
 
         if settings.PII_DEBUG and pii_entities:
             # Safe debug: log only spans + confidence, never raw values.
