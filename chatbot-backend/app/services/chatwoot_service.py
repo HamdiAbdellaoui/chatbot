@@ -262,6 +262,19 @@ async def assign_team(*, account_id: int, conversation_id: int, team_id: int) ->
     await update_conversation(account_id=account_id, conversation_id=conversation_id, data={"team_id": team_id})
 
 
+async def toggle_status(*, account_id: int, conversation_id: int, status: str = "open") -> None:
+    """Change the conversation status (open / pending / resolved / snoozed)."""
+    url = f"{_base_url()}/api/v1/accounts/{account_id}/conversations/{conversation_id}/toggle_status"
+    async with httpx.AsyncClient(timeout=_timeout()) as client:
+        try:
+            resp = await client.post(url, headers=_headers(), json={"status": status})
+        except httpx.RequestError as e:
+            raise ChatwootError("Failed to toggle conversation status", details=str(e)) from e
+
+        if resp.status_code >= 400:
+            raise ChatwootError("Chatwoot toggle status failed", status_code=resp.status_code, details=resp.text[:4000])
+
+
 async def escalate_conversation(
     *,
     account_id: int,
@@ -272,6 +285,13 @@ async def escalate_conversation(
 ) -> None:
     # Label must always be applied for persistent state.
     await add_labels(account_id=account_id, conversation_id=conversation_id, labels=labels)
+
+    # Agent Bot inboxes keep conversations "pending" (hidden from the agents'
+    # default view); reopening makes the handoff visible. Best-effort.
+    try:
+        await toggle_status(account_id=account_id, conversation_id=conversation_id, status="open")
+    except ChatwootError as e:
+        logger.warning("Failed to set conversation status to open (status=%s)", e.status_code)
 
     # Hybrid strategy: assign to agent or team if configured.
     if assignee_id is not None:
