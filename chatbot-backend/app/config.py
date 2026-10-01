@@ -103,6 +103,15 @@ class Settings(BaseSettings):
     # Keep disabled in production unless you explicitly want this behavior.
     WOOCOMMERCE_COMMANDS_ENABLED: bool = Field(False, env="WOOCOMMERCE_COMMANDS_ENABLED")
 
+    # How orders requested in chat are handled:
+    # - "handoff" (default): the model can only call `request_order`; nothing is
+    #   created in WooCommerce. A private note + ORDER_VALIDATION_LABEL are added
+    #   to the Chatwoot conversation and it is escalated to a human agent.
+    # - "direct": legacy behavior, the model calls `create_draft_order` and a
+    #   pending WooCommerce order is created. Tests only.
+    WOOCOMMERCE_ORDER_MODE: str = Field("handoff", env="WOOCOMMERCE_ORDER_MODE")
+    ORDER_VALIDATION_LABEL: str = Field("order_validation", env="ORDER_VALIDATION_LABEL")
+
     # --- Human escalation (Phase 3) ---
     ESCALATION_ENABLED: bool = Field(True, env="ESCALATION_ENABLED")
     ESCALATION_LABEL: str = Field("human_handoff", env="ESCALATION_LABEL")

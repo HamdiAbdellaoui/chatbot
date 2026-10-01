@@ -47,9 +47,12 @@ def _timeout() -> httpx.Timeout:
     return httpx.Timeout(connect=min(3.0, t), read=t, write=t, pool=min(3.0, t))
 
 
-async def send_message(*, account_id: int, conversation_id: int, content: str) -> None:
+async def send_message(*, account_id: int, conversation_id: int, content: str, private: bool = False) -> None:
+    """Post a message in a conversation. private=True creates an internal note visible to agents only."""
     url = f"{_base_url()}/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages"
-    payload = {"content": content}
+    payload: Dict[str, Any] = {"content": content}
+    if private:
+        payload["private"] = True
 
     async with httpx.AsyncClient(timeout=_timeout()) as client:
         try:

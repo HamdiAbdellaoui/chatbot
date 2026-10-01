@@ -1,5 +1,8 @@
 """Shared fixtures. Nothing here touches the network or needs an OpenAI key."""
 
+import json
+from types import SimpleNamespace
+
 import pytest
 
 from app.config import settings
@@ -63,6 +66,73 @@ def pipeline(monkeypatch):
     monkeypatch.setattr(settings, "PII_ALLOWED_TERMS", "")
     monkeypatch.setattr(settings, "PII_MIN_CONFIDENCE", None)
     return rec
+
+
+def tool_call(name: str, args: dict, call_id: str = "call_1"):
+    return SimpleNamespace(id=call_id, type="function", function=SimpleNamespace(name=name, arguments=json.dumps(args)))
+
+
+def chat_response(content: str | None = None, tool_calls: list | None = None):
+    message = SimpleNamespace(role="assistant", content=content, tool_calls=tool_calls or None)
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+class FakeOpenAIClient:
+    """Returns the scripted responses in order and records every request."""
+
+    def __init__(self, responses: list):
+        self._responses = list(responses)
+        self.requests: list[dict] = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    async def _create(self, **kwargs):
+        self.requests.append(kwargs)
+        if not self._responses:
+            raise AssertionError("FakeOpenAIClient: no scripted response left")
+        return self._responses.pop(0)
+
+
+class FakeWooClient:
+    def __init__(self, products: dict[int, dict] | None = None):
+        self.products = products if products is not None else {
+            12: {"id": 12, "name": "Perceuse test", "price": "149.000", "stock_status": "instock"},
+        }
+        self.calls: list[tuple] = []
+
+    async def search_products(self, *, query, limit=5):
+        self.calls.append(("search_products", query))
+        return []
+
+    async def get_price_and_stock(self, *, product_id):
+        self.calls.append(("get_price_and_stock", product_id))
+        return dict(self.products.get(product_id) or {"id": None})
+
+    async def create_draft_order(self, *, line_items, customer_note=None):
+        self.calls.append(("create_draft_order", list(line_items), customer_note))
+        return SimpleNamespace(id=999, status="pending", total="149.000", currency="TND", payment_url=None)
+
+    async def aclose(self):
+        self.calls.append(("aclose",))
+
+
+@pytest.fixture
+def fake_llm(monkeypatch):
+    """Wire llm_service to a FakeOpenAIClient and a FakeWooClient.
+
+    Usage: client = fake_llm([chat_response(...), ...]); client.wc is the Woo fake.
+    """
+    from app.services import llm_service
+
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key-not-real")
+
+    def install(responses: list, *, wc: FakeWooClient | None = None):
+        client = FakeOpenAIClient(responses)
+        client.wc = wc if wc is not None else FakeWooClient()
+        monkeypatch.setattr(llm_service, "_get_client", lambda: client)
+        monkeypatch.setattr(llm_service, "get_woocommerce_client_for_store", lambda store: client.wc)
+        return client
+
+    return install
 
 
 def make_payload(content: str, *, message_id: int = 1, conversation_id: int = 42) -> dict:

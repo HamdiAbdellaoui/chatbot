@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import logging
 import json
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from openai import AsyncOpenAI
 
 from app.config import settings
 from app.services.store_context_service import StoreContext
-from app.services.woocommerce_service import get_woocommerce_client_for_store, WooCommerceError
+from app.services.woocommerce_service import get_woocommerce_client_for_store
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,7 @@ async def generate_reply(*, user_message: str, system_prompt: Optional[str] = No
         # Keep the fallback short and neutral; do not leak internal details.
         return "Sorry, I'm having trouble answering right now. Please try again in a moment."
 
-_WOOCOMMERCE_TOOLS = [
+_SEARCH_AND_PRICE_TOOLS = [
     {
         "type": "function",
         "function": {
@@ -182,26 +183,145 @@ _WOOCOMMERCE_TOOLS = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_draft_order",
-            "description": "Creates a draft order in WooCommerce with the given line items.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "product_id": {"type": "integer", "description": "The product ID."},
-                    "quantity": {"type": "integer", "description": "Quantity to order."},
-                    "customer_note": {"type": "string", "description": "Optional notes from the customer."}
-                },
-                "required": ["product_id", "quantity"],
-            },
-        },
-    }
 ]
 
-async def generate_grounded_reply(*, user_message: str, context: str, system_prompt: Optional[str] = None, store_context: Optional[StoreContext] = None, history: Optional[list[dict]] = None, language: Optional[str] = None) -> str:
-    """Generate a reply grounded on retrieved context (basic RAG) and capable of calling WooCommerce tools."""
+_ORDER_TOOL_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "product_id": {"type": "integer", "description": "The product ID."},
+        "quantity": {"type": "integer", "description": "Quantity to order."},
+        "customer_note": {"type": "string", "description": "Optional notes from the customer."}
+    },
+    "required": ["product_id", "quantity"],
+}
+
+# WOOCOMMERCE_ORDER_MODE=direct (tests only): the model creates the order itself.
+_CREATE_DRAFT_ORDER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "create_draft_order",
+        "description": "Creates a draft order in WooCommerce with the given line items.",
+        "parameters": _ORDER_TOOL_PARAMETERS,
+    },
+}
+
+# WOOCOMMERCE_ORDER_MODE=handoff (default): the model only forwards the request
+# to a human advisor, who validates and creates the order.
+_REQUEST_ORDER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "request_order",
+        "description": (
+            "Forwards the customer's order request (product, quantity, note) to a human sales advisor, "
+            "who will validate it and create the order. Does not create any order by itself."
+        ),
+        "parameters": _ORDER_TOOL_PARAMETERS,
+    },
+}
+
+
+def _order_mode() -> str:
+    mode = (settings.WOOCOMMERCE_ORDER_MODE or "").strip().lower()
+    return "direct" if mode == "direct" else "handoff"
+
+
+def get_woocommerce_tools() -> list[dict]:
+    order_tool = _CREATE_DRAFT_ORDER_TOOL if _order_mode() == "direct" else _REQUEST_ORDER_TOOL
+    return [*_SEARCH_AND_PRICE_TOOLS, order_tool]
+
+
+@dataclass(frozen=True)
+class OrderRequest:
+    """An order request forwarded to a human (handoff mode). Server-side only."""
+    product_id: int
+    product_name: str | None
+    price: str | None
+    quantity: int
+    customer_note: str | None
+
+
+def _as_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        n = int(value.strip())
+        return n if n > 0 else None
+    return None
+
+
+async def execute_tool_call(
+    function_name: str,
+    args: Dict[str, Any],
+    *,
+    wc_client: Any,
+    order_requests: Optional[List[OrderRequest]] = None,
+) -> str:
+    """Execute one tool requested by the model and return its JSON/text result.
+
+    Never raises: errors are returned to the model as text.
+    """
+    if wc_client is None:
+        return "(Error: WooCommerce client is not available for this store)"
+
+    try:
+        if function_name == "search_products":
+            res = await wc_client.search_products(query=args.get("query", ""))
+            return json.dumps([{"id": p.id, "name": p.name, "price": p.price, "stock_status": p.stock_status} for p in res])
+
+        if function_name == "get_price_and_stock":
+            res = await wc_client.get_price_and_stock(product_id=args.get("product_id"))
+            return json.dumps(res)
+
+        if function_name == "create_draft_order" and _order_mode() == "direct":
+            res = await wc_client.create_draft_order(
+                line_items=[(args.get("product_id"), args.get("quantity"))],
+                customer_note=args.get("customer_note")
+            )
+            return json.dumps({"order_id": res.id, "status": res.status, "total": res.total})
+
+        if function_name == "request_order" and _order_mode() == "handoff":
+            product_id = _as_positive_int(args.get("product_id"))
+            quantity = _as_positive_int(args.get("quantity"))
+            if product_id is None or quantity is None:
+                return json.dumps({"status": "invalid_request", "message": "product_id and quantity must be positive integers."})
+
+            # Read-only check that the product exists; no order is created.
+            info = await wc_client.get_price_and_stock(product_id=product_id)
+            if not info or info.get("id") is None:
+                return json.dumps({"status": "product_not_found", "product_id": product_id})
+
+            note = args.get("customer_note")
+            request = OrderRequest(
+                product_id=product_id,
+                product_name=str(info.get("name")) if info.get("name") else None,
+                price=str(info.get("price")) if info.get("price") not in (None, "") else None,
+                quantity=quantity,
+                customer_note=note.strip() if isinstance(note, str) and note.strip() else None,
+            )
+            if order_requests is not None:
+                order_requests.append(request)
+            return json.dumps({
+                "status": "forwarded_to_advisor",
+                "message": "The order request was forwarded to a human advisor, who will validate it and get back to the customer. No order has been created yet.",
+                "product_name": request.product_name,
+                "quantity": quantity,
+            })
+
+        return f"(Error: Unknown function {function_name})"
+    except Exception as e:
+        logger.warning("Tool %s failed (%s)", function_name, type(e).__name__)
+        return f"Failed to execute {function_name}: {e}"
+
+
+async def generate_grounded_reply(*, user_message: str, context: str, system_prompt: Optional[str] = None, store_context: Optional[StoreContext] = None, history: Optional[list[dict]] = None, language: Optional[str] = None, order_requests: Optional[List[OrderRequest]] = None) -> str:
+    """Generate a reply grounded on retrieved context (basic RAG) and capable of calling WooCommerce tools.
+
+    In WOOCOMMERCE_ORDER_MODE=handoff, every validated `request_order` call is
+    appended to `order_requests` (when provided) so the caller can hand the
+    conversation over to a human.
+    """
     merged_system = (system_prompt or _resolve_system_prompt(language)) + "\n\n" + _RAG_GROUNDING_RULES
     augmented_user = build_rag_user_prompt(question=user_message, context=context)
 
@@ -216,10 +336,10 @@ async def generate_grounded_reply(*, user_message: str, context: str, system_pro
     messages.append({"role": "user", "content": augmented_user})
 
     wc_client = get_woocommerce_client_for_store(store_context) if store_context else None
-    tools = _WOOCOMMERCE_TOOLS if wc_client else None
+    tools = get_woocommerce_tools() if wc_client else None
 
     try:
-        
+
         response = await client.chat.completions.create(
             model=settings.OPENAI_MODEL,
             messages=messages,
@@ -230,40 +350,23 @@ async def generate_grounded_reply(*, user_message: str, context: str, system_pro
         )
 
         response_message = response.choices[0].message
-        
+
         if response_message.tool_calls:
             # We append the assistant's request to call a tool
             messages.append(response_message)
-            
+
             for tool_call in response_message.tool_calls:
                 function_name = tool_call.function.name
                 try:
                     args = json.loads(tool_call.function.arguments)
                 except json.JSONDecodeError:
                     args = {}
-                
-                tool_result = "(Error: Unable to parse tool arguments)"
-                if wc_client:
-                    try:
-                        if function_name == "search_products":
-                            res = await wc_client.search_products(query=args.get("query", ""))
-                            # Format to JSON string
-                            tool_result = json.dumps([{"id": p.id, "name": p.name, "price": p.price, "stock_status": p.stock_status} for p in res])
-                        elif function_name == "get_price_and_stock":
-                            res = await wc_client.get_price_and_stock(product_id=args.get("product_id"))
-                            tool_result = json.dumps(res)
-                        elif function_name == "create_draft_order":
-                            res = await wc_client.create_draft_order(
-                                line_items=[(args.get("product_id"), args.get("quantity"))],
-                                customer_note=args.get("customer_note")
-                            )
-                            tool_result = json.dumps({"order_id": res.id, "status": res.status, "total": res.total})
-                        else:
-                            tool_result = f"(Error: Unknown function {function_name})"
-                    except Exception as e:
-                        tool_result = f"Failed to execute {function_name}: {e}"
-                else:
-                    tool_result = "(Error: WooCommerce client is not available for this store)"
+                if not isinstance(args, dict):
+                    args = {}
+
+                tool_result = await execute_tool_call(
+                    function_name, args, wc_client=wc_client, order_requests=order_requests
+                )
 
                 # Append tool response
                 messages.append({

@@ -10,12 +10,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, Literal
 
 from app.config import settings
-from app.services.llm_service import generate_grounded_reply, estimate_context_grounding
+from app.services.llm_service import OrderRequest, generate_grounded_reply, estimate_context_grounding
 from app.services.rag_service import retrieve_context
 from app.services.store_context_service import resolve_store
 from app.services.woocommerce_service import WooCommerceError, get_woocommerce_client_for_store
 from app.services.escalation_service import detect_escalation_request, detect_low_confidence
-from app.services.chatwoot_service import ChatwootError, escalate_conversation, get_conversation_labels
+from app.services.chatwoot_service import ChatwootError, escalate_conversation, get_conversation_labels, send_message
 from app.services.pii_service import detect_pii, mask_pii, select_entities_to_mask
 from app.services.active_learning_service import log_low_confidence_flag
 from app.services.session_service import get_history, append_turn
@@ -36,6 +36,11 @@ def _parse_wc_command(text: str) -> tuple[str, list[str]] | None:
     return (parts[1].lower(), parts[2:])
 
 logger = logging.getLogger(__name__)
+
+ORDER_FORWARDED_MESSAGE = (
+    "Merci ! Votre demande de commande a été transmise à un conseiller, "
+    "qui va la vérifier et revenir vers vous ici."
+)
 
 
 def _log_event(event: str, *, conversation_id: int | None, store_id: str | None, escalation_reason: str | None) -> None:
@@ -89,7 +94,12 @@ def _get_id(obj: Any, *path: str) -> int | None:
     return None
 
 
-async def _apply_escalation_labels(*, effective_account_id: int | None, conversation_id: int | None) -> None:
+async def _apply_escalation_labels(
+    *,
+    effective_account_id: int | None,
+    conversation_id: int | None,
+    extra_labels: list[str] | None = None,
+) -> None:
     """Apply escalation labels/assignment in Chatwoot. Best-effort: never raises."""
     if not (isinstance(effective_account_id, int) and isinstance(conversation_id, int) and settings.CHATWOOT_API_TOKEN):
         return
@@ -98,6 +108,8 @@ async def _apply_escalation_labels(*, effective_account_id: int | None, conversa
         labels_to_apply = [settings.ESCALATION_LABEL]
         if settings.ESCALATION_SEND_ACK and settings.ESCALATION_ACK_LABEL:
             labels_to_apply.append(settings.ESCALATION_ACK_LABEL)
+        # One single call: Chatwoot's labels endpoint replaces the label set.
+        labels_to_apply.extend(l for l in (extra_labels or []) if l and l not in labels_to_apply)
 
         await asyncio.wait_for(
             escalate_conversation(
@@ -113,6 +125,52 @@ async def _apply_escalation_labels(*, effective_account_id: int | None, conversa
         logger.warning("Escalation API call failed (status=%s)", e.status_code)
     except TimeoutError:
         logger.warning("Escalation API call timed out")
+
+
+def _format_order_note(requests: list[OrderRequest]) -> str:
+    """Private note for agents. Customer notes are re-masked defensively."""
+    allowed_terms = _parse_allowed_terms_csv(settings.PII_ALLOWED_TERMS)
+    lines = ["Demande de commande à valider (transmise par le bot, aucune commande créée dans WooCommerce) :"]
+    for r in requests:
+        lines.append(f"- Produit #{r.product_id} : {r.product_name or '?'}")
+        lines.append(f"  Prix unitaire : {r.price or '?'} | Quantité : {r.quantity}")
+        if r.customer_note:
+            note = mask_pii(r.customer_note, min_confidence=settings.PII_MIN_CONFIDENCE, allowed_terms=allowed_terms)
+            lines.append(f"  Note client : {note}")
+    return "\n".join(lines)
+
+
+async def _hand_over_order_request(
+    *,
+    requests: list[OrderRequest],
+    effective_account_id: int | None,
+    conversation_id: int | None,
+) -> None:
+    """Private note + order label + escalation so an agent validates the order. Never raises."""
+    if not (isinstance(effective_account_id, int) and isinstance(conversation_id, int) and settings.CHATWOOT_API_TOKEN):
+        logger.warning("Order request received but Chatwoot API is not configured; cannot notify an agent")
+        return
+
+    try:
+        await asyncio.wait_for(
+            send_message(
+                account_id=effective_account_id,
+                conversation_id=conversation_id,
+                content=_format_order_note(requests),
+                private=True,
+            ),
+            timeout=settings.ESCALATION_API_BUDGET_S,
+        )
+    except ChatwootError as e:
+        logger.warning("Failed to post order request note (status=%s)", e.status_code)
+    except TimeoutError:
+        logger.warning("Posting order request note timed out")
+
+    await _apply_escalation_labels(
+        effective_account_id=effective_account_id,
+        conversation_id=conversation_id,
+        extra_labels=[settings.ORDER_VALIDATION_LABEL],
+    )
 
 async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int | None = None) -> ChatbotResult:
     """
@@ -351,8 +409,48 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
         history = await get_history(conversation_id) if isinstance(conversation_id, int) else []
 
         llm_started_at = time.perf_counter()
-        response_content = await generate_grounded_reply(user_message=masked_user_message, context=context, store_context=store, history=history, language=detected_language)
+        order_requests: list[OrderRequest] = []
+        response_content = await generate_grounded_reply(
+            user_message=masked_user_message,
+            context=context,
+            store_context=store,
+            history=history,
+            language=detected_language,
+            order_requests=order_requests,
+        )
         latency_ms = int((time.perf_counter() - llm_started_at) * 1000)
+
+        # 4a. Order request (WOOCOMMERCE_ORDER_MODE=handoff): a human validates it in Chatwoot.
+        if order_requests:
+            logger.info("Order request forwarded to a human (count=%s)", len(order_requests))
+            _log_event(
+                "escalation_triggered",
+                conversation_id=conversation_id if isinstance(conversation_id, int) else None,
+                store_id=store.key,
+                escalation_reason="order_request",
+            )
+            await _hand_over_order_request(
+                requests=order_requests,
+                effective_account_id=effective_account_id,
+                conversation_id=conversation_id,
+            )
+            order_reply = ORDER_FORWARDED_MESSAGE
+            await log_turn(
+                conversation_id=conversation_id if isinstance(conversation_id, int) else None,
+                inbox_id=inbox_id if isinstance(inbox_id, int) else None,
+                store_key=store.key,
+                direction="out",
+                content_masked=order_reply,
+                rag_top_score=top_score if isinstance(top_score, float) else None,
+                escalated=True,
+                escalation_reason="order_request",
+                model=settings.OPENAI_MODEL,
+                latency_ms=latency_ms,
+            )
+            if isinstance(conversation_id, int):
+                await append_turn(conversation_id, "user", masked_user_message)
+                await append_turn(conversation_id, "assistant", order_reply)
+            return ChatbotResult(action="reply", reply=order_reply, escalated=True, reason="order_request")
 
         # 4b. Combined 3-signal confidence score (RAG score + LLM self-assessment +
         # business-decision rule). The LLM signal needs the generated answer, so
