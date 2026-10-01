@@ -10,7 +10,9 @@ This module is intentionally pure (no network calls).
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
+from functools import lru_cache
 
 from app.config import settings
 
@@ -21,29 +23,22 @@ class EscalationDecision:
     reason: str | None = None
 
 
-def _iter_keywords() -> list[str]:
-    raw = settings.ESCALATION_KEYWORDS or ""
-    parts = [p.strip().lower() for p in raw.split(",")]
-    return [p for p in parts if p]
+def _fold_accents(text: str) -> str:
+    # "à" -> "a", "é" -> "e" (Arabic diacritics/hamza marks are folded the same
+    # way on both sides, so matching stays consistent).
+    return "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
 
 
-def _compile_pattern() -> re.Pattern[str]:
-    # Match keyword as a substring, but require word boundaries when keyword is a single word.
-    # For multi-word phrases, we just do a normalized substring match.
-    keywords = _iter_keywords()
-    if not keywords:
-        return re.compile(r"$a")
-
+@lru_cache(maxsize=8)
+def _compile_escalation_keywords(keywords_csv: str) -> tuple[tuple[str, ...], re.Pattern[str] | None]:
+    """Return (normalized phrases, single-word pattern) for an ESCALATION_KEYWORDS value."""
+    keywords = [_norm_text(_fold_accents(p)) for p in (keywords_csv or "").split(",")]
+    keywords = [k for k in keywords if k]
+    phrases = tuple(k for k in keywords if " " in k)
     single_words = [re.escape(k) for k in keywords if " " not in k]
-    chunks: list[str] = []
-    if single_words:
-        chunks.append(r"\b(?:" + "|".join(single_words) + r")\b")
-    # phrases are handled separately with a simple substring check
-    pattern = r"(?:" + "|".join(chunks) + r")" if chunks else r"$a"
-    return re.compile(pattern, flags=re.IGNORECASE)
-
-
-_WORD_RE = _compile_pattern()
+    # Whole-word match (letters, digits and arabizi digits count as word characters).
+    pattern = re.compile(r"(?<!\w)(?:" + "|".join(single_words) + r")(?!\w)") if single_words else None
+    return phrases, pattern
 
 
 def _norm_text(text: str) -> str:
@@ -81,14 +76,15 @@ def detect_escalation_request(user_message: str) -> EscalationDecision:
     if not msg:
         return EscalationDecision(False)
 
-    normalized = _norm_text(msg)
+    normalized = _norm_text(_fold_accents(msg))
+    phrases, word_pattern = _compile_escalation_keywords(settings.ESCALATION_KEYWORDS or "")
 
     # Fast substring check for phrases
-    for phrase in _iter_keywords():
-        if " " in phrase and phrase in normalized:
+    for phrase in phrases:
+        if phrase in normalized:
             return EscalationDecision(True, reason=f"keyword_phrase:{phrase}")
 
-    if _WORD_RE.search(msg):
+    if word_pattern is not None and word_pattern.search(normalized):
         return EscalationDecision(True, reason="keyword_word")
 
     return EscalationDecision(False)

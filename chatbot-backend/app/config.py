@@ -122,18 +122,23 @@ class Settings(BaseSettings):
     # Upper bound for total Chatwoot API time spent in escalation per webhook.
     ESCALATION_API_BUDGET_S: float = Field(2.5, env="ESCALATION_API_BUDGET_S")
 
-    # Comma-separated keywords. Keep simple; detection runs case-insensitive.
+    # Comma-separated keywords/phrases (FR / AR / Tunisian darija / EN).
+    # Matching is case- and accent-insensitive; multi-word entries match as
+    # substrings, single words only as whole words. Avoid ambiguous single
+    # words such as "support" or "agent" ("support mural" is a product).
     ESCALATION_KEYWORDS: str = Field(
-        "human,agent,representative,talk to someone,talk to a human,customer service,support",
+        "parler à un agent,parler à un conseiller,parler à un humain,un conseiller,service client,"
+        "je veux un humain,humain,talk to a human,talk to an agent,human agent,customer service,"
+        "نحب نحكي مع,نحكي مع عبد,بغيت نكلم,n7eb nahki m3a,nheb nahki m3a,n7eb n7ki m3a,nkallem 3abd,"
+        "موظف خدمة العملاء,أريد التحدث مع موظف",
         env="ESCALATION_KEYWORDS",
     )
 
     # Send one final acknowledgement message when escalation is triggered.
     ESCALATION_SEND_ACK: bool = Field(True, env="ESCALATION_SEND_ACK")
-    ESCALATION_ACK_MESSAGE: str = Field(
-        "Okay — I’m connecting you to a human agent.",
-        env="ESCALATION_ACK_MESSAGE",
-    )
+    # Empty (default): a message localized in the customer's language is used
+    # (see app/services/messages.py). If set, this exact text is always sent.
+    ESCALATION_ACK_MESSAGE: str = Field("", env="ESCALATION_ACK_MESSAGE")
 
     # Optional: escalate automatically when confidence is low.
     ESCALATION_LOW_CONFIDENCE_ENABLED: bool = Field(False, env="ESCALATION_LOW_CONFIDENCE_ENABLED")

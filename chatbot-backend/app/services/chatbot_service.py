@@ -21,6 +21,7 @@ from app.services.active_learning_service import log_low_confidence_flag
 from app.services.session_service import get_history, append_turn
 from app.services.conversation_log_service import log_turn
 from app.services.language_service import detect_language
+from app.services.messages import get_message
 from app.services.confidence_service import combine_confidence, is_business_decision, should_call_llm_confidence_signal
 
 
@@ -36,12 +37,6 @@ def _parse_wc_command(text: str) -> tuple[str, list[str]] | None:
     return (parts[1].lower(), parts[2:])
 
 logger = logging.getLogger(__name__)
-
-ORDER_FORWARDED_MESSAGE = (
-    "Merci ! Votre demande de commande a été transmise à un conseiller, "
-    "qui va la vérifier et revenir vers vous ici."
-)
-
 
 def _log_event(event: str, *, conversation_id: int | None, store_id: str | None, escalation_reason: str | None) -> None:
     payload = {
@@ -182,6 +177,7 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
     Returns:
         ChatbotResult describing whether to reply or suppress.
     """
+    detected_language = "other"
     try:
         # 1. Extract relevant information from the payload (robust to payload shape)
         message = _extract_message(payload)
@@ -219,7 +215,7 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
         logger.info("Detected language=%s", detected_language)
 
         if not user_message.strip():
-            return ChatbotResult(action="reply", reply="I didn't receive any text. Could you please type your question?")
+            return ChatbotResult(action="reply", reply=get_message("empty_message", detected_language))
 
         # 2. Resolve store context (multi-store)
         store = resolve_store(inbox_id=inbox_id, inbox_name=inbox_name)
@@ -260,7 +256,7 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
 
                 # Send one final acknowledgement if configured, then stop future replies via label.
                 if settings.ESCALATION_SEND_ACK:
-                    return ChatbotResult(action="reply", reply=settings.ESCALATION_ACK_MESSAGE, escalated=True, reason=decision.reason)
+                    return ChatbotResult(action="reply", reply=get_message("escalation_ack", detected_language), escalated=True, reason=decision.reason)
                 return ChatbotResult(action="no_reply", escalated=True, reason=decision.reason)
 
         # Optional: explicit WooCommerce commands for development/testing.
@@ -434,7 +430,7 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
                 effective_account_id=effective_account_id,
                 conversation_id=conversation_id,
             )
-            order_reply = ORDER_FORWARDED_MESSAGE
+            order_reply = get_message("order_forwarded", detected_language)
             await log_turn(
                 conversation_id=conversation_id if isinstance(conversation_id, int) else None,
                 inbox_id=inbox_id if isinstance(inbox_id, int) else None,
@@ -501,7 +497,7 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
                 )
                 await _apply_escalation_labels(effective_account_id=effective_account_id, conversation_id=conversation_id)
 
-                ack_reply = settings.ESCALATION_ACK_MESSAGE if settings.ESCALATION_SEND_ACK else None
+                ack_reply = get_message("escalation_ack", detected_language) if settings.ESCALATION_SEND_ACK else None
                 await log_turn(
                     conversation_id=conversation_id if isinstance(conversation_id, int) else None,
                     inbox_id=inbox_id if isinstance(inbox_id, int) else None,
@@ -517,7 +513,7 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
                 )
 
                 if settings.ESCALATION_SEND_ACK:
-                    return ChatbotResult(action="reply", reply=settings.ESCALATION_ACK_MESSAGE, escalated=True, reason=lc.reason)
+                    return ChatbotResult(action="reply", reply=get_message("escalation_ack", detected_language), escalated=True, reason=lc.reason)
                 return ChatbotResult(action="no_reply", escalated=True, reason=lc.reason)
 
         await log_turn(
@@ -544,4 +540,4 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
     except Exception as e:
         logger.exception("Error processing Chatwoot message.")
         # In case of an error, return a user-friendly message.
-        return ChatbotResult(action="reply", reply="I'm sorry, but I encountered an error. Please try again later.")
+        return ChatbotResult(action="reply", reply=get_message("generic_error", detected_language))

@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from openai import AsyncOpenAI
 
 from app.config import settings
+from app.services.messages import get_message
 from app.services.store_context_service import StoreContext
 from app.services.woocommerce_service import get_woocommerce_client_for_store
 
@@ -120,12 +121,12 @@ async def generate_reply(*, user_message: str, system_prompt: Optional[str] = No
     - Return a safe, user-friendly fallback string to the caller
     """
     if not user_message.strip():
-        return "I didn't receive any text. Could you please type your question?"
+        return get_message("empty_message", language)
 
     # Fail fast on common misconfiguration to avoid confusing behavior during development.
     if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY in {"your_openai_api_key", "sk-..."}:
         logger.error("OPENAI_API_KEY is not configured (or is still a placeholder).")
-        return "Sorry, the assistant is not configured yet. Please try again later."
+        return get_message("not_configured", language)
 
     prompt = system_prompt or _resolve_system_prompt(language)
 
@@ -152,7 +153,7 @@ async def generate_reply(*, user_message: str, system_prompt: Optional[str] = No
     except Exception:
         logger.exception("OpenAI request failed")
         # Keep the fallback short and neutral; do not leak internal details.
-        return "Sorry, I'm having trouble answering right now. Please try again in a moment."
+        return get_message("generic_error", language)
 
 _SEARCH_AND_PRICE_TOOLS = [
     {
@@ -327,7 +328,7 @@ async def generate_grounded_reply(*, user_message: str, context: str, system_pro
 
     if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY in {"your_openai_api_key", "sk-..."}:
         logger.error("OPENAI_API_KEY is not configured.")
-        return "Sorry, the assistant is not configured yet. Please try again later."
+        return get_message("not_configured", language)
 
     client = _get_client()
     messages = [{"role": "system", "content": merged_system}]
@@ -390,7 +391,7 @@ async def generate_grounded_reply(*, user_message: str, context: str, system_pro
 
     except Exception:
         logger.exception("OpenAI grounded request failed")
-        return "Sorry, I'm having trouble answering right now. Please try again in a moment."
+        return get_message("generic_error", language)
 
     finally:
         if wc_client is not None:
