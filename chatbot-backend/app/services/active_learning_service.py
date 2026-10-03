@@ -15,6 +15,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
+from app.db import get_asyncpg as _get_asyncpg, get_pool as _get_shared_pool
 
 logger = logging.getLogger(__name__)
 
@@ -29,36 +30,25 @@ def _warned_disabled() -> bool:
     return False
 
 
-@lru_cache(maxsize=1)
-def _get_asyncpg():
-    try:
-        import asyncpg  # type: ignore
-    except Exception as exc:
-        raise RuntimeError("asyncpg is required for active learning logging") from exc
-    return asyncpg
-
-
-_pool = None
-_pool_lock = asyncio.Lock()
+_schema_ready = False
+_schema_lock = asyncio.Lock()
 
 
 async def _get_pool():
-    asyncpg = _get_asyncpg()
     dsn = (settings.ACTIVE_LEARNING_DATABASE_URL or "").strip()
     if not dsn:
         raise RuntimeError("ACTIVE_LEARNING_DATABASE_URL is not configured")
 
-    global _pool
-    if _pool is not None:
-        return _pool
+    pool = await _get_shared_pool(dsn)
 
-    async with _pool_lock:
-        if _pool is not None:
-            return _pool
-        pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=5, command_timeout=10)
-        await _init_schema(pool)
-        _pool = pool
-        return _pool
+    global _schema_ready
+    if not _schema_ready:
+        async with _schema_lock:
+            if not _schema_ready:
+                await _init_schema(pool)
+                _schema_ready = True
+
+    return pool
 
 
 async def _init_schema(pool) -> None:

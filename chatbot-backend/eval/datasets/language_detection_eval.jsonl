@@ -1,0 +1,37 @@
+{"text": "Bonjour, je voudrais suivre ma commande numéro 12345, merci.", "expected_language": "fr"}
+{"text": "Est-ce que la livraison est gratuite pour les commandes de plus de 100 dinars ?", "expected_language": "fr"}
+{"text": "Le produit que j'ai reçu est cassé, je veux un remboursement.", "expected_language": "fr"}
+{"text": "Merci beaucoup pour votre aide, bonne journée.", "expected_language": "fr"}
+{"text": "Quels sont les délais de livraison vers Sfax ?", "expected_language": "fr"}
+{"text": "Je n'ai pas reçu de confirmation par email après mon paiement.", "expected_language": "fr"}
+{"text": "Pouvez-vous m'indiquer les tailles disponibles pour ce modèle ?", "expected_language": "fr"}
+{"text": "J'aimerais annuler ma commande passée hier soir.", "expected_language": "fr"}
+{"text": "Le service client a été très réactif, merci infiniment.", "expected_language": "fr"}
+{"text": "Avez-vous une garantie sur les appareils électroniques ?", "expected_language": "fr"}
+{"text": "Bonsoir, je cherche des informations sur le mode de paiement à la livraison.", "expected_language": "fr"}
+{"text": "Pourriez-vous vérifier le statut de mon colis s'il vous plaît ?", "expected_language": "fr"}
+{"text": "السلام عليكم، أريد معرفة حالة طلبي رقم 456.", "expected_language": "ar"}
+{"text": "هل يمكنني استرجاع المنتج إذا لم يعجبني؟", "expected_language": "ar"}
+{"text": "متى سيتم تسليم الطلبية إلى مدينة صفاقس؟", "expected_language": "ar"}
+{"text": "شكرا جزيلا على خدمتكم الممتازة.", "expected_language": "ar"}
+{"text": "أين يمكنني تتبع شحنتي عبر الموقع؟", "expected_language": "ar"}
+{"text": "المنتج الذي استلمته معطل، أريد استرجاع المال.", "expected_language": "ar"}
+{"text": "هل تتوفر لديكم إمكانية الدفع عند التسليم؟", "expected_language": "ar"}
+{"text": "أرغب في تغيير عنوان التوصيل من فضلكم.", "expected_language": "ar"}
+{"text": "متى يبدأ التخفيض على الأجهزة الكهربائية؟", "expected_language": "ar"}
+{"text": "لم أستلم رسالة تأكيد الطلب على بريدي الإلكتروني.", "expected_language": "ar"}
+{"text": "Salem, bech nsaal 3la commande mte3i, wislit walla?", "expected_language": "darija"}
+{"text": "3andi problème fi payment, ma yekhdemch el carte.", "expected_language": "darija"}
+{"text": "Barcha nas 3andhom problème fi livraison, chnowa el 7al?", "expected_language": "darija"}
+{"text": "Kifeh nprocedi bech nrodd produit li jani khayeb?", "expected_language": "darija"}
+{"text": "Yezzi nsibou el produit fi stock walla lazem nestanna?", "expected_language": "darija"}
+{"text": "Ahna nhabou el livraison tkoun bcher, chna7where el mochkla?", "expected_language": "darija"}
+{"text": "Inchallah tji commande mte3i el youm, barcha merci.", "expected_language": "darija"}
+{"text": "Wesh fama discount 3al smartphone li 7abit nakhouh?", "expected_language": "darija"}
+{"text": "Hnaya el prix ghali barcha, fama tarif a7sen?", "expected_language": "darija"}
+{"text": "5ouya 9alli el colis rah e5er, chnowa nnajm na3mel?", "expected_language": "darija"}
+{"text": "Bonjour, bech nsaal 3la ma commande, elle est où?", "expected_language": "darija"}
+{"text": "Merci brother, walla you sauvez ma journée!", "expected_language": "darija"}
+{"text": "Ok super, inchallah kolshi ybarek.", "expected_language": "darija"}
+{"text": "Je veux nrodd had produit mte3i, walla mush 9an3a.", "expected_language": "darija"}
+{"text": "Hi, kifeh nintegri el paiement bel carte bancaire?", "expected_language": "darija"}

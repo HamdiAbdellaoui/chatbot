@@ -32,6 +32,49 @@ Rules:
 - Be concise and helpful.
 """.strip()
 
+_SYSTEM_PROMPT_FR = """
+Tu es un assistant du service client pour une plateforme e-commerce tunisienne.
+
+Règles :
+- Réponds toujours en français, de façon claire et concise.
+- Ne change pas de langue à moins que l'utilisateur ne le fasse en premier.
+- Sois utile et direct.
+""".strip()
+
+_SYSTEM_PROMPT_AR = """
+أنت مساعد لخدمة العملاء لدى منصة تجارة إلكترونية تونسية.
+
+القواعد:
+- أجب دائماً بالعربية الفصحى، بوضوح واختصار.
+- لا تغيّر اللغة إلا إذا غيّرها العميل أولاً.
+- كن مفيداً ومباشراً.
+""".strip()
+
+_SYSTEM_PROMPT_DARIJA = """
+Tu es un assistant du service client pour une plateforme e-commerce tunisienne.
+
+Règles :
+- Réponds en darija tunisienne, exactement comme le ferait un agent tunisien au quotidien.
+- N'hésite pas à mélanger arabe et français dans la même phrase (arabizi) si c'est naturel dans ce registre.
+- Ne change pas de registre à moins que le client ne le fasse en premier.
+- Reste concis et utile.
+""".strip()
+
+_SYSTEM_PROMPTS_BY_LANGUAGE: dict[str, str] = {
+    "fr": _SYSTEM_PROMPT_FR,
+    "ar": _SYSTEM_PROMPT_AR,
+    "darija": _SYSTEM_PROMPT_DARIJA,
+    # "other" (and any unrecognized value) falls back to the generic,
+    # language-mirroring prompt used before language detection existed.
+    "other": _LANGUAGE_MIRRORING_SYSTEM_PROMPT,
+}
+
+
+def _resolve_system_prompt(language: Optional[str]) -> str:
+    if not language:
+        return _LANGUAGE_MIRRORING_SYSTEM_PROMPT
+    return _SYSTEM_PROMPTS_BY_LANGUAGE.get(language, _LANGUAGE_MIRRORING_SYSTEM_PROMPT)
+
 
 _RAG_GROUNDING_RULES = """
 You will receive a CONTEXT section containing snippets from the company's knowledge base.
@@ -68,7 +111,7 @@ def _get_client() -> AsyncOpenAI:
     return AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
 
-async def generate_reply(*, user_message: str, system_prompt: Optional[str] = None) -> str:
+async def generate_reply(*, user_message: str, system_prompt: Optional[str] = None, language: Optional[str] = None) -> str:
     """Generate a reply using OpenAI Chat Completions.
 
     Error strategy:
@@ -83,7 +126,7 @@ async def generate_reply(*, user_message: str, system_prompt: Optional[str] = No
         logger.error("OPENAI_API_KEY is not configured (or is still a placeholder).")
         return "Sorry, the assistant is not configured yet. Please try again later."
 
-    prompt = system_prompt or _LANGUAGE_MIRRORING_SYSTEM_PROMPT
+    prompt = system_prompt or _resolve_system_prompt(language)
 
     try:
         client = _get_client()
@@ -157,20 +200,20 @@ _WOOCOMMERCE_TOOLS = [
     }
 ]
 
-async def generate_grounded_reply(*, user_message: str, context: str, system_prompt: Optional[str] = None, store_context: Optional[StoreContext] = None) -> str:
+async def generate_grounded_reply(*, user_message: str, context: str, system_prompt: Optional[str] = None, store_context: Optional[StoreContext] = None, history: Optional[list[dict]] = None, language: Optional[str] = None) -> str:
     """Generate a reply grounded on retrieved context (basic RAG) and capable of calling WooCommerce tools."""
-    merged_system = (system_prompt or _LANGUAGE_MIRRORING_SYSTEM_PROMPT) + "\n\n" + _RAG_GROUNDING_RULES
+    merged_system = (system_prompt or _resolve_system_prompt(language)) + "\n\n" + _RAG_GROUNDING_RULES
     augmented_user = build_rag_user_prompt(question=user_message, context=context)
-    
+
     if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY in {"your_openai_api_key", "sk-..."}:
         logger.error("OPENAI_API_KEY is not configured.")
         return "Sorry, the assistant is not configured yet. Please try again later."
-    
+
     client = _get_client()
-    messages = [
-        {"role": "system", "content": merged_system},
-        {"role": "user", "content": augmented_user},
-    ]
+    messages = [{"role": "system", "content": merged_system}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": augmented_user})
 
     wc_client = get_woocommerce_client_for_store(store_context) if store_context else None
     tools = _WOOCOMMERCE_TOOLS if wc_client else None
@@ -252,3 +295,59 @@ async def generate_grounded_reply(*, user_message: str, context: str, system_pro
                 await wc_client.aclose()
             except Exception:
                 logger.warning("Failed to close WooCommerce client")
+
+
+# --- LLM self-assessment (confidence signal #2, see confidence_service.py) ---
+
+_GROUNDING_SELF_ASSESSMENT_SYSTEM_PROMPT = """
+You will be shown a CONTEXT, a USER QUESTION, and an ANSWER that was already generated.
+Rate, from 0.0 to 1.0, how much the ANSWER relies on facts present in the CONTEXT
+rather than on general knowledge not found in the CONTEXT.
+Respond with ONLY a compact JSON object, no prose: {"grounding_confidence": <float between 0.0 and 1.0>}
+""".strip()
+
+# Keep this self-assessment call cheap and short: it must never meaningfully
+# delay the reply already generated. Any failure/timeout below simply drops
+# this signal (returns None) rather than raising.
+_GROUNDING_SELF_ASSESSMENT_TIMEOUT_S = 6.0
+
+
+async def estimate_context_grounding(*, user_message: str, context: str, answer: str) -> Optional[float]:
+    """Ask the LLM to self-rate how grounded `answer` is in `context`.
+
+    Fail-safe by design: returns None (never raises) on missing API key,
+    timeout, malformed JSON, or an out-of-range value, so a missing signal
+    simply degrades confidence_service.combine_confidence() gracefully.
+    """
+    if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY in {"your_openai_api_key", "sk-..."}:
+        return None
+
+    try:
+        client = _get_client()
+        safe_context = context.strip() if context and context.strip() else "[no context found]"
+        prompt = (
+            f"CONTEXT:\n{safe_context}\n\n"
+            f"USER QUESTION:\n{user_message.strip()}\n\n"
+            f"ANSWER:\n{answer.strip()}"
+        )
+        response = await client.chat.completions.create(
+            model=settings.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": _GROUNDING_SELF_ASSESSMENT_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=20,
+            temperature=0.0,
+            timeout=_GROUNDING_SELF_ASSESSMENT_TIMEOUT_S,
+            response_format={"type": "json_object"},
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        data = json.loads(raw)
+        value = float(data.get("grounding_confidence"))
+        if not (0.0 <= value <= 1.0):
+            logger.warning("LLM grounding self-assessment out of range (value=%s); dropping signal", value)
+            return None
+        return value
+    except Exception:
+        logger.warning("LLM grounding self-assessment failed; continuing without this signal", exc_info=True)
+        return None
