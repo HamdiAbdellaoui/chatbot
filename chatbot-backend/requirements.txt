@@ -28,6 +28,9 @@ llama-index-embeddings-openai
 # --- Active Learning (PostgreSQL logging) ---
 asyncpg
 
+# --- Conversation session memory (Redis) ---
+redis
+
 # --- Development Tools ---
 pyngrok
 

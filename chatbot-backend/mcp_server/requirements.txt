@@ -1,0 +1,7 @@
+# Dependencies for the MCP server PROTOTYPE only.
+# Kept out of the main requirements.txt on purpose: this POC is not part of the
+# production image (infra/docker-compose.yml is unchanged).
+#
+# Install with:  pip install -r mcp_server/requirements.txt
+
+mcp

@@ -4,12 +4,13 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any, Dict, Literal
 
 from app.config import settings
-from app.services.llm_service import generate_grounded_reply
+from app.services.llm_service import generate_grounded_reply, estimate_context_grounding
 from app.services.rag_service import retrieve_context
 from app.services.store_context_service import resolve_store
 from app.services.woocommerce_service import WooCommerceError, get_woocommerce_client_for_store
@@ -17,6 +18,10 @@ from app.services.escalation_service import detect_escalation_request, detect_lo
 from app.services.chatwoot_service import ChatwootError, escalate_conversation, get_conversation_labels
 from app.services.pii_service import detect_pii, mask_pii, select_entities_to_mask
 from app.services.active_learning_service import log_low_confidence_flag
+from app.services.session_service import get_history, append_turn
+from app.services.conversation_log_service import log_turn
+from app.services.language_service import detect_language
+from app.services.confidence_service import combine_confidence, is_business_decision, should_call_llm_confidence_signal
 
 
 def _parse_wc_command(text: str) -> tuple[str, list[str]] | None:
@@ -83,6 +88,32 @@ def _get_id(obj: Any, *path: str) -> int | None:
         return int(cur)
     return None
 
+
+async def _apply_escalation_labels(*, effective_account_id: int | None, conversation_id: int | None) -> None:
+    """Apply escalation labels/assignment in Chatwoot. Best-effort: never raises."""
+    if not (isinstance(effective_account_id, int) and isinstance(conversation_id, int) and settings.CHATWOOT_API_TOKEN):
+        return
+
+    try:
+        labels_to_apply = [settings.ESCALATION_LABEL]
+        if settings.ESCALATION_SEND_ACK and settings.ESCALATION_ACK_LABEL:
+            labels_to_apply.append(settings.ESCALATION_ACK_LABEL)
+
+        await asyncio.wait_for(
+            escalate_conversation(
+                account_id=effective_account_id,
+                conversation_id=conversation_id,
+                labels=labels_to_apply,
+                assignee_id=settings.ESCALATION_ASSIGNEE_ID,
+                team_id=settings.ESCALATION_TEAM_ID,
+            ),
+            timeout=settings.ESCALATION_API_BUDGET_S,
+        )
+    except ChatwootError as e:
+        logger.warning("Escalation API call failed (status=%s)", e.status_code)
+    except TimeoutError:
+        logger.warning("Escalation API call timed out")
+
 async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int | None = None) -> ChatbotResult:
     """
     Processes an incoming message from Chatwoot and generates a response.
@@ -126,6 +157,9 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
         )
         logger.info("User message received (len=%s)", len(user_message))
 
+        detected_language = detect_language(user_message)
+        logger.info("Detected language=%s", detected_language)
+
         if not user_message.strip():
             return ChatbotResult(action="reply", reply="I didn't receive any text. Could you please type your question?")
 
@@ -164,26 +198,7 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
                     store_id=store.key,
                     escalation_reason=decision.reason,
                 )
-                if isinstance(effective_account_id, int) and isinstance(conversation_id, int) and settings.CHATWOOT_API_TOKEN:
-                    try:
-                        labels_to_apply = [settings.ESCALATION_LABEL]
-                        if settings.ESCALATION_SEND_ACK and settings.ESCALATION_ACK_LABEL:
-                            labels_to_apply.append(settings.ESCALATION_ACK_LABEL)
-
-                        await asyncio.wait_for(
-                            escalate_conversation(
-                                account_id=effective_account_id,
-                                conversation_id=conversation_id,
-                                labels=labels_to_apply,
-                                assignee_id=settings.ESCALATION_ASSIGNEE_ID,
-                                team_id=settings.ESCALATION_TEAM_ID,
-                            ),
-                            timeout=settings.ESCALATION_API_BUDGET_S,
-                        )
-                    except ChatwootError as e:
-                        logger.warning("Escalation API call failed (status=%s)", e.status_code)
-                    except TimeoutError:
-                        logger.warning("Escalation API call timed out")
+                await _apply_escalation_labels(effective_account_id=effective_account_id, conversation_id=conversation_id)
 
                 # Send one final acknowledgement if configured, then stop future replies via label.
                 if settings.ESCALATION_SEND_ACK:
@@ -288,52 +303,18 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
             allowed_terms=allowed_terms,
         )
 
-        # Optional: low-confidence escalation after retrieval.
-        if settings.ESCALATION_ENABLED:
-            lc = detect_low_confidence(top_score=top_score if isinstance(top_score, float) else None, hits_count=len(hits))
-            if lc.should_escalate:
-                logger.info("Escalating due to low confidence (reason=%s)", lc.reason)
-                # Active learning: persist a flag for supervisor review.
-                await log_low_confidence_flag(
-                    store_key=store.key,
-                    inbox_id=inbox_id if isinstance(inbox_id, int) else None,
-                    conversation_id=conversation_id if isinstance(conversation_id, int) else None,
-                    reason=lc.reason,
-                    top_score=top_score if isinstance(top_score, float) else None,
-                    hits_count=len(hits),
-                    sources=sources,
-                    masked_user_message=masked_user_message,
-                )
-                _log_event(
-                    "escalation_triggered",
-                    conversation_id=conversation_id if isinstance(conversation_id, int) else None,
-                    store_id=store.key,
-                    escalation_reason=lc.reason,
-                )
-                if isinstance(effective_account_id, int) and isinstance(conversation_id, int) and settings.CHATWOOT_API_TOKEN:
-                    try:
-                        labels_to_apply = [settings.ESCALATION_LABEL]
-                        if settings.ESCALATION_SEND_ACK and settings.ESCALATION_ACK_LABEL:
-                            labels_to_apply.append(settings.ESCALATION_ACK_LABEL)
-
-                        await asyncio.wait_for(
-                            escalate_conversation(
-                                account_id=effective_account_id,
-                                conversation_id=conversation_id,
-                                labels=labels_to_apply,
-                                assignee_id=settings.ESCALATION_ASSIGNEE_ID,
-                                team_id=settings.ESCALATION_TEAM_ID,
-                            ),
-                            timeout=settings.ESCALATION_API_BUDGET_S,
-                        )
-                    except ChatwootError as e:
-                        logger.warning("Escalation API call failed (status=%s)", e.status_code)
-                    except TimeoutError:
-                        logger.warning("Escalation API call timed out")
-
-                if settings.ESCALATION_SEND_ACK:
-                    return ChatbotResult(action="reply", reply=settings.ESCALATION_ACK_MESSAGE, escalated=True, reason=lc.reason)
-                return ChatbotResult(action="no_reply", escalated=True, reason=lc.reason)
+        # Full conversation log (masked content only). Best-effort: log_turn never raises.
+        pii_types_detected = sorted({e.type for e in pii_to_mask}) if pii_to_mask else None
+        await log_turn(
+            conversation_id=conversation_id if isinstance(conversation_id, int) else None,
+            inbox_id=inbox_id if isinstance(inbox_id, int) else None,
+            store_key=store.key,
+            direction="in",
+            content_masked=masked_user_message,
+            pii_types=pii_types_detected,
+            rag_top_score=top_score if isinstance(top_score, float) else None,
+            rag_hits_count=len(hits),
+        )
 
         # 4. Generate grounded response via LLM
         logger.info("Calling LLM with retrieved context")
@@ -365,7 +346,97 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
             ]
             logger.debug("PII spans=%s", json.dumps(spans, ensure_ascii=False, separators=(",", ":")))
 
-        response_content = await generate_grounded_reply(user_message=masked_user_message, context=context, store_context=store)
+        history = await get_history(conversation_id) if isinstance(conversation_id, int) else []
+
+        llm_started_at = time.perf_counter()
+        response_content = await generate_grounded_reply(user_message=masked_user_message, context=context, store_context=store, history=history, language=detected_language)
+        latency_ms = int((time.perf_counter() - llm_started_at) * 1000)
+
+        # 4b. Combined 3-signal confidence score (RAG score + LLM self-assessment +
+        # business-decision rule). The LLM signal needs the generated answer, so
+        # this can only be computed after the LLM call above, not before it.
+        # Perf: the self-assessment call is a second LLM round-trip, so it's only
+        # made when the RAG score alone is ambiguous (see should_call_llm_confidence_signal).
+        rag_score_for_confidence = top_score if isinstance(top_score, float) else None
+        if should_call_llm_confidence_signal(rag_score=rag_score_for_confidence, hits_count=len(hits)):
+            llm_confidence = await estimate_context_grounding(user_message=masked_user_message, context=context, answer=response_content)
+        else:
+            llm_confidence = None
+            logger.info("Skipping LLM confidence self-assessment (rag_score=%s hits=%s not ambiguous)", top_score, len(hits))
+        business_decision = is_business_decision(masked_user_message)
+        confidence_score = combine_confidence(
+            rag_score=rag_score_for_confidence,
+            llm_confidence=llm_confidence,
+            is_business_decision=business_decision,
+        )
+        logger.info(
+            "Confidence score=%.2f (rag_score=%s llm_confidence=%s business_decision=%s)",
+            confidence_score,
+            top_score,
+            llm_confidence,
+            business_decision,
+        )
+
+        # 4c. Optional: escalate when the combined confidence is too low.
+        if settings.ESCALATION_ENABLED:
+            lc = detect_low_confidence(confidence_score=confidence_score, hits_count=len(hits))
+            if lc.should_escalate:
+                logger.info("Escalating due to low confidence (reason=%s confidence_score=%.2f)", lc.reason, confidence_score)
+                # Active learning: persist a flag for supervisor review.
+                await log_low_confidence_flag(
+                    store_key=store.key,
+                    inbox_id=inbox_id if isinstance(inbox_id, int) else None,
+                    conversation_id=conversation_id if isinstance(conversation_id, int) else None,
+                    reason=lc.reason,
+                    top_score=top_score if isinstance(top_score, float) else None,
+                    hits_count=len(hits),
+                    sources=sources,
+                    masked_user_message=masked_user_message,
+                )
+                _log_event(
+                    "escalation_triggered",
+                    conversation_id=conversation_id if isinstance(conversation_id, int) else None,
+                    store_id=store.key,
+                    escalation_reason=lc.reason,
+                )
+                await _apply_escalation_labels(effective_account_id=effective_account_id, conversation_id=conversation_id)
+
+                ack_reply = settings.ESCALATION_ACK_MESSAGE if settings.ESCALATION_SEND_ACK else None
+                await log_turn(
+                    conversation_id=conversation_id if isinstance(conversation_id, int) else None,
+                    inbox_id=inbox_id if isinstance(inbox_id, int) else None,
+                    store_key=store.key,
+                    direction="out",
+                    content_masked=ack_reply,
+                    rag_top_score=top_score if isinstance(top_score, float) else None,
+                    confidence_score=confidence_score,
+                    escalated=True,
+                    escalation_reason=lc.reason,
+                    model=settings.OPENAI_MODEL,
+                    latency_ms=latency_ms,
+                )
+
+                if settings.ESCALATION_SEND_ACK:
+                    return ChatbotResult(action="reply", reply=settings.ESCALATION_ACK_MESSAGE, escalated=True, reason=lc.reason)
+                return ChatbotResult(action="no_reply", escalated=True, reason=lc.reason)
+
+        await log_turn(
+            conversation_id=conversation_id if isinstance(conversation_id, int) else None,
+            inbox_id=inbox_id if isinstance(inbox_id, int) else None,
+            store_key=store.key,
+            direction="out",
+            content_masked=response_content,
+            rag_top_score=top_score if isinstance(top_score, float) else None,
+            confidence_score=confidence_score,
+            escalated=False,
+            escalation_reason=None,
+            model=settings.OPENAI_MODEL,
+            latency_ms=latency_ms,
+        )
+
+        if isinstance(conversation_id, int):
+            await append_turn(conversation_id, "user", masked_user_message)
+            await append_turn(conversation_id, "assistant", response_content)
 
         # 5. Return the generated content
         return ChatbotResult(action="reply", reply=response_content)

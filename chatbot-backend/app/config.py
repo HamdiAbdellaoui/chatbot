@@ -2,7 +2,7 @@
 # Uses Pydantic's BaseSettings to load environment variables.
 
 from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 class Settings(BaseSettings):
     """
@@ -111,9 +111,52 @@ class Settings(BaseSettings):
         env="ESCALATION_ACK_MESSAGE",
     )
 
-    # Optional: escalate automatically when retrieval confidence is low.
+    # Optional: escalate automatically when confidence is low.
     ESCALATION_LOW_CONFIDENCE_ENABLED: bool = Field(False, env="ESCALATION_LOW_CONFIDENCE_ENABLED")
+    # Deprecated: superseded by CONFIDENCE_LOW_THRESHOLD/CONFIDENCE_HIGH_THRESHOLD
+    # below (combined 3-signal confidence score). Kept only so old .env files
+    # referencing it don't fail to load; it is no longer read by the code.
     ESCALATION_MIN_TOP_SCORE: float = Field(0.15, env="ESCALATION_MIN_TOP_SCORE")
+
+    # --- Confidence scoring (3 signals: RAG score, LLM self-assessment, business-decision rule) ---
+    # See app/services/confidence_service.py. Combined score >= HIGH: normal;
+    # between LOW and HIGH: uncertainty signal (flagged, not escalated);
+    # below LOW: full escalation.
+    CONFIDENCE_HIGH_THRESHOLD: float = Field(0.75, env="CONFIDENCE_HIGH_THRESHOLD")
+    CONFIDENCE_LOW_THRESHOLD: float = Field(0.50, env="CONFIDENCE_LOW_THRESHOLD")
+
+    # Perf: the LLM self-assessment call (signal #2) is a second, extra LLM
+    # round-trip on top of the main reply, so it adds real latency. When True
+    # (recommended default), it's only made when the RAG score is genuinely
+    # ambiguous (see confidence_service.should_call_llm_confidence_signal) —
+    # i.e. clearly-high or clearly-low RAG scores skip it entirely, since the
+    # combined score/escalation outcome wouldn't meaningfully change anyway.
+    # Set to False to always call it (useful for measuring worst-case latency).
+    CONFIDENCE_LLM_SIGNAL_AMBIGUOUS_ONLY: bool = Field(True, env="CONFIDENCE_LLM_SIGNAL_AMBIGUOUS_ONLY")
+
+    # Comma-separated keywords indicating the message involves a business decision
+    # (refund, dispute, order cancellation, ...) that deserves extra caution.
+    # Same matching model as ESCALATION_KEYWORDS (case-insensitive).
+    BUSINESS_DECISION_KEYWORDS: str = Field(
+        "réclamation,litige,remboursement,remboursé,exception,annulation,"
+        "annuler ma commande,annuler la commande,dispute,plainte,compensation,"
+        "dédommagement,geste commercial,dérogation,refund,cancel order,"
+        "cancel my order,complaint,chargeback",
+        env="BUSINESS_DECISION_KEYWORDS",
+    )
+
+    # --- Conversation session memory (multi-turn) ---
+    # If set, session history is stored in Redis (fast, native TTL).
+    REDIS_URL: str = Field("", env="REDIS_URL")
+    # Number of most recent turns (individual user/assistant messages) to keep per conversation.
+    SESSION_HISTORY_TURNS: int = Field(6, env="SESSION_HISTORY_TURNS")
+    # How long a conversation's history is retained without activity.
+    SESSION_TTL_SECONDS: int = Field(3600, env="SESSION_TTL_SECONDS")
+
+    # --- Shared PostgreSQL database (Phase 3) ---
+    # Used by conversation_log_service (and, via fallback, active learning) for
+    # persisting observability data. Example: postgresql://user:pass@postgres:5432/chatwoot
+    APP_DATABASE_URL: str = Field("", env="APP_DATABASE_URL")
 
     # --- Active learning loop (Phase 3) ---
     # When enabled, the backend logs low-confidence events to PostgreSQL for supervisor review.
@@ -121,6 +164,14 @@ class Settings(BaseSettings):
     ACTIVE_LEARNING_ENABLED: bool = Field(False, env="ACTIVE_LEARNING_ENABLED")
     # Example: postgresql://user:pass@postgres:5432/chatwoot
     ACTIVE_LEARNING_DATABASE_URL: str = Field("", env="ACTIVE_LEARNING_DATABASE_URL")
+
+    @model_validator(mode="after")
+    def _fallback_app_database_url(self):
+        # Keep ACTIVE_LEARNING_DATABASE_URL for backward compatibility: if
+        # APP_DATABASE_URL is unset, reuse it so existing deployments keep working.
+        if not self.APP_DATABASE_URL and self.ACTIVE_LEARNING_DATABASE_URL:
+            self.APP_DATABASE_URL = self.ACTIVE_LEARNING_DATABASE_URL
+        return self
 
     # Basic retrieval tuning (no LlamaIndex yet)
     RAG_TOP_K: int = Field(4, env="RAG_TOP_K")
