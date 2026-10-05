@@ -87,6 +87,12 @@ Grounding rules:
 - Use the CONTEXT to answer. If the CONTEXT does not contain the answer, say you don't know and ask a clarifying question or suggest transferring to a human agent.
 - Do NOT invent policies, prices, stock, delivery times, or other facts not present in the CONTEXT.
 - If you cite information, keep it paraphrased and concise.
+
+Language rule (takes priority over the language of the CONTEXT):
+- The CONTEXT snippets may be written in any language (English, French, Darija...). They are reference data, not a language example.
+- Reply ONLY in the language and register of the USER QUESTION: English question -> English answer, French -> French, Tunisian Darija in Arabic script -> Darija in Arabic script, Darija in Latin letters (Arabizi) -> Arabizi.
+- Also match the question's script: a question written in Arabic letters gets an answer written entirely in Arabic letters, even when the CONTEXT uses Latin letters (and vice versa).
+- Translate the facts from the CONTEXT into that language and script; never copy a snippet verbatim.
 """.strip()
 
 
@@ -96,6 +102,8 @@ CONTEXT:
 
 USER QUESTION:
 {question}
+
+(Answer in the same language as the USER QUESTION above.)
 """.strip()
 
 

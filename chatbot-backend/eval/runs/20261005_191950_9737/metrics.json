@@ -1,0 +1,16 @@
+{
+  "run_id": "20261005_191950_9737",
+  "timestamp_utc": "2026-10-05T19:20:12.880373+00:00",
+  "dataset": "eval\\datasets\\qa_kb_v1.jsonl",
+  "mode": "rag",
+  "model": "gpt-4o",
+  "semantic_backend": "openai",
+  "counts": {
+    "total": 10
+  },
+  "metrics": {
+    "exact_match_accuracy": 0.0,
+    "refusal_accuracy": 1.0,
+    "semantic_similarity_mean": 0.8573662827202453
+  }
+}

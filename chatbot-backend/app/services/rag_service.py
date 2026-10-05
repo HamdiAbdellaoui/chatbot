@@ -8,6 +8,7 @@ This step utilizes:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Tuple
 
@@ -68,7 +69,9 @@ async def retrieve_context(
             index = VectorStoreIndex.from_vector_store(vector_store)
             retriever = index.as_retriever(similarity_top_k=top_k)
         
-        nodes = await retriever.aretrieve(query)
+        # get_client() is a sync QdrantClient: aretrieve() would require an
+        # AsyncQdrantClient (aclient), so run the sync retrieval off the event loop.
+        nodes = await asyncio.to_thread(retriever.retrieve, query)
         
         hits: List[Dict[str, Any]] = []
         parts: List[str] = []

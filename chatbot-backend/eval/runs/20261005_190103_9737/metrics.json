@@ -1,0 +1,16 @@
+{
+  "run_id": "20261005_190103_9737",
+  "timestamp_utc": "2026-10-05T19:01:16.547458+00:00",
+  "dataset": "eval\\datasets\\qa_template.jsonl",
+  "mode": "chat",
+  "model": "gpt-4o",
+  "semantic_backend": "token",
+  "counts": {
+    "total": 3
+  },
+  "metrics": {
+    "exact_match_accuracy": 0.0,
+    "refusal_accuracy": 1.0,
+    "semantic_similarity_mean": 0.037037037037037035
+  }
+}

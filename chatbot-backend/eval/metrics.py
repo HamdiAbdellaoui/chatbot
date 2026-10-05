@@ -35,22 +35,28 @@ def token_jaccard_similarity(a: str, b: str) -> Optional[float]:
     return len(ta & tb) / max(1, len(ta | tb))
 
 
+# A refusal is a first-person statement that the assistant cannot/will not
+# help. Apologies alone ("sorry", "désolé", "آسف") are NOT refusals: a correct
+# policy answer often starts with "Sorry, used items can't be returned".
+# Second-person forms ("you can't return...", "ma tnajamch", "ما تنجمش")
+# describe a policy and must not match.
 _REFUSAL_PATTERNS: Sequence[re.Pattern[str]] = [
     re.compile(p, flags=re.IGNORECASE)
     for p in [
-        r"\bi can\s*not\b",
-        r"\bi can't\b",
-        r"\bcan't assist\b",
-        r"\bi cannot help\b",
-        r"\bi'm sorry\b",
-        r"\bsorry\b",
-        r"\bnot able to\b",
-        r"\bi won't\b",
-        r"\bje ne peux pas\b",
-        r"\bdésolé\b",
-        r"\bما نقدرش\b",
-        r"\bمانقدرش\b",
-        r"\bآسف\b",
+        # English
+        r"\bi\s+(?:can\s*not|can't|can’t|won't|won’t|will not)\b",
+        r"\bi(?:\s+am|'m|’m)\s+(?:unable to|not able to|not allowed to|not permitted to|not authorized to)\b",
+        # French
+        r"\bje ne (?:peux|pourrai|suis pas en mesure|suis pas autorisée?)\b",
+        r"\bimpossible pour moi\b",
+        # Tunisian Darija, Latin script: "ma nnejjemch", "manajamch", "ma n9adarch"
+        r"\bma\s*n+[ae]?j+[ae]?m+ch\b",
+        r"\bma\s*n[ae]?9[ae]?d[ae]?rch\b",
+        r"\bma\s*n+جمش",  # mixed script, e.g. "ma nجمش"
+        # Arabic script (Darija + MSA): "ما نجمش", "ما نقدرش", "لا أستطيع", "لا يمكنني"
+        r"(?<![تي])ن+جمش",
+        r"(?<![تي])نقدرش",
+        r"لا\s*(?:أستطيع|استطيع|يمكنني|أقدر|نقدر)",
     ]
 ]
 
