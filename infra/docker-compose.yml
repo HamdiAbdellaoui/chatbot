@@ -41,7 +41,7 @@ services:
     ports:
       # Not strictly necessary to expose, but can be useful for debugging.
       - "6379:6379"
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --appendfsync no
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
