@@ -41,6 +41,12 @@ LOCALIZED_MESSAGES: dict[str, dict[str, str]] = {
         "darija": "Ya3tik essa7a! Talbek wsel l conseiller, bech ychoufou w yrja3lek houni.",
         "other": "Thanks! Your order request has been forwarded to an advisor, who will check it and get back to you here.",
     },
+    "greeting": {
+        "fr": "Bonjour ! Je suis l'assistant de la boutique. Posez-moi votre question sur nos produits, la livraison ou les retours.",
+        "ar": "مرحباً! أنا مساعد المتجر. اطرح عليّ سؤالك حول منتجاتنا أو التوصيل أو الإرجاع.",
+        "darija": "Aslema! Ana l'assistant mta3 el boutique. Es2elni 3la les produits, el livraison walla el retour.",
+        "other": "Hello! I'm the store assistant. Ask me your question about our products, delivery or returns.",
+    },
 }
 
 # Messages that an explicitly set environment variable overrides (any language).

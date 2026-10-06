@@ -22,6 +22,7 @@ from app.services.session_service import get_history, append_turn
 from app.services.conversation_log_service import log_turn
 from app.services.language_service import detect_language
 from app.services.messages import get_message
+from app.services.greeting_service import is_greeting_only
 from app.services.confidence_service import combine_confidence, is_business_decision, should_call_llm_confidence_signal
 
 
@@ -258,6 +259,12 @@ async def process_chatwoot_message(payload: Dict[str, Any], *, account_id: int |
                 if settings.ESCALATION_SEND_ACK:
                     return ChatbotResult(action="reply", reply=get_message("escalation_ack", detected_language), escalated=True, reason=decision.reason)
                 return ChatbotResult(action="no_reply", escalated=True, reason=decision.reason)
+
+        # 2d. Greeting only ("bonjour", "aslema"...): fixed reply, no RAG/LLM, so a
+        # low retrieval score can't trigger a low-confidence escalation.
+        if is_greeting_only(user_message):
+            logger.info("Greeting-only message; replying without RAG")
+            return ChatbotResult(action="reply", reply=get_message("greeting", detected_language))
 
         # Optional: explicit WooCommerce commands for development/testing.
         # Example:
