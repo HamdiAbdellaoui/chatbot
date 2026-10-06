@@ -142,7 +142,7 @@ async def log_low_confidence_flag(
                 reason,
                 top_score,
                 int(hits_count),
-                asyncpg.types.Json(payload_sources),
+                json.dumps(payload_sources),
                 masked_user_message,
                 settings.OPENAI_MODEL,
             )

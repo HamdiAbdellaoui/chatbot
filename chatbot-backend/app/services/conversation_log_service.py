@@ -10,6 +10,7 @@ Design goals (mirrors active_learning_service.py):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from functools import lru_cache
 from typing import List, Optional
@@ -115,7 +116,7 @@ async def log_turn(
     try:
         pool = await _get_pool()
         asyncpg = get_asyncpg()
-        pii_types_json = asyncpg.types.Json(pii_types) if pii_types is not None else None
+        pii_types_json = json.dumps(pii_types) if pii_types is not None else None
 
         async with pool.acquire() as conn:
             await conn.execute(
